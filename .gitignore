@@ -55,7 +55,9 @@ Thumbs.db
 *.log
 
 # DevBox Pack specific
-devbox-pack
+/devbox-pack
+bin/devbox-pack
+dist/devbox-pack
 *.plan.jsonrailpack/
 
 # Local test results
