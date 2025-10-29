@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+  schedule:
+    # run every day to alert against changes in dependencies
+    - cron: "0 0 * * *"
+
+jobs:
+  test:
+    name: Check and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.63.4
+          args: --timeout=5m
+
+      - name: Format
+        run: go fmt ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test Unit
+        run: go test -short ./...
+
+      - name: Build
+        run: go build -o bin/devbox-pack ./cmd/main.go
+
+      - name: Test Binary
+        run: ./bin/devbox-pack --help
