@@ -2,8 +2,7 @@ project_name: devbox-pack
 
 before:
   hooks:
-    - go mod tidy
-    - go mod verify
+    - make deps
 
 builds:
   - id: devbox-pack
@@ -19,11 +18,14 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.buildTime={{.Date}}
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.branch={{.Branch}} -X main.buildTime={{.Date}} -X main.goVersion={{.Env.GOVERSION}} -extldflags '-static'
     flags:
       - -trimpath
       - -a
       - -installsuffix=cgo
+      - -buildvcs=false
+      - -gcflags=all=-l -B
+      - -mod=readonly
     tags:
       - netgo
       - osusergo
