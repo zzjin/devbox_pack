@@ -1,0 +1,78 @@
+project_name: devbox-pack
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - id: devbox-pack
+    main: ./cmd/main.go
+    binary: devbox-pack
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}} -X main.buildTime={{.Date}}
+    flags:
+      - -trimpath
+      - -a
+      - -installsuffix=cgo
+    tags:
+      - netgo
+      - osusergo
+      - release
+
+archives:
+  - id: devbox-pack
+    builds:
+      - devbox-pack
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}-v{{ .Version }}-
+      {{- if and (eq .Arch "amd64") (eq .Os "darwin") }}x86_64-apple-darwin
+      {{- else if and (eq .Arch "arm64") (eq .Os "darwin") }}arm64-apple-darwin
+      {{- else if and (eq .Arch "amd64") (eq .Os "linux") }}x86_64-unknown-linux-musl
+      {{- else if and (eq .Arch "arm64") (eq .Os "linux") }}arm64-unknown-linux-musl
+      {{- else if and (eq .Arch "amd64") (eq .Os "windows") }}x86_64-pc-windows-msvc
+      {{- else if and (eq .Arch "arm64") (eq .Os "windows") }}arm64-pc-windows-msvc
+      {{- else }}{{ .Arch }}-{{ .Os }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - CONTRIBUTING.md
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - '^style:'
+      - '^refactor:'
+      - Merge pull request
+      - Merge branch
+
+checksum:
+  name_template: 'checksums.txt'
+
+release:
+  prerelease: auto
+  name_template: "DevBox Pack v{{.Version}}"
+  draft: false
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+dist: dist
