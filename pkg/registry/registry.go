@@ -1,7 +1,5 @@
-/**
- * DevBox Pack Execution Plan Generator - Provider Registry
- */
-
+// Package registry provides a registry for managing and accessing different providers
+// used in the DevBox Pack execution plan generator.
 package registry
 
 import (

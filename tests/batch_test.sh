@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# DevBox Pack 批量测试脚本
-# 用于遍历所有测试用例并生成执行计划
+# DevBox Pack batch testing script
+# Used to traverse all test cases and generate execution plans
 
 set -e
 
-# 配置变量
+# Configuration variables
 DEVBOX_PACK_BIN="/home/sealos/Projects/labring/devbox-pack/impl/go/bin/devbox-pack"
 EXAMPLES_DIR="/home/sealos/Projects/labring/devbox-pack/railpack/examples"
 OUTPUT_DIR="/home/sealos/Projects/labring/devbox-pack/test_results"
@@ -13,14 +13,14 @@ LOG_FILE="$OUTPUT_DIR/batch_test.log"
 VALIDATION_REPORT="$OUTPUT_DIR/validation_report.json"
 ANALYSIS_REPORT="$OUTPUT_DIR/final_analysis_report.md"
 
-# 颜色输出
+# Color output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 日志函数
+# Logging functions
 log() {
     echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
@@ -41,54 +41,54 @@ log_error() {
     log "${RED}[ERROR]${NC} $1"
 }
 
-# 创建输出目录
+# Create output directories
 create_output_dirs() {
-    log_info "创建输出目录..."
+    log_info "Creating output directories..."
     mkdir -p "$OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR/plans"
     mkdir -p "$OUTPUT_DIR/logs"
     mkdir -p "$OUTPUT_DIR/errors"
     
-    # 清空日志文件
+    # Clear log file
     > "$LOG_FILE"
-    log_info "输出目录创建完成: $OUTPUT_DIR"
+    log_info "Output directories created: $OUTPUT_DIR"
 }
 
-# 获取所有测试用例目录
+# Get all test case directories
 get_test_cases() {
     find "$EXAMPLES_DIR" -maxdepth 1 -type d -name "*" | \
     grep -v "^$EXAMPLES_DIR$" | \
     sort
 }
 
-# 验证 JSON 计划文件
+# Validate JSON plan file
 validate_json_plan() {
     local plan_file="$1"
     local test_case_name="$2"
     
-    # 检查 JSON 格式
+    # Check JSON format
     if ! jq empty "$plan_file" 2>/dev/null; then
         return 1
     fi
     
-    # 检查必需字段
+    # Check required fields
     local required_fields=("provider" "base" "runtime" "commands")
     for field in "${required_fields[@]}"; do
         if ! jq -e ".$field" "$plan_file" >/dev/null 2>&1; then
-            log_warning "⚠️  $test_case_name - 缺少必需字段: $field"
+            log_warning "⚠️  $test_case_name - Missing required field: $field"
         fi
     done
     
-    # 检查 provider 字段值
+    # Check provider field value
     local provider=$(jq -r '.provider // "unknown"' "$plan_file" 2>/dev/null)
     if [[ "$provider" == "unknown" || "$provider" == "null" ]]; then
-        log_warning "⚠️  $test_case_name - Provider 字段无效: $provider"
+        log_warning "⚠️  $test_case_name - Invalid provider field: $provider"
     fi
     
     return 0
 }
 
-# 分析错误类型
+# Analyze error type
 analyze_error_type() {
     local error_file="$1"
     local error_content=$(cat "$error_file" 2>/dev/null || echo "")
@@ -106,7 +106,7 @@ analyze_error_type() {
     fi
 }
 
-# 处理单个测试用例
+# Process single test case
 process_test_case() {
     local test_case_path="$1"
     local test_case_name=$(basename "$test_case_path")
@@ -114,35 +114,35 @@ process_test_case() {
     local log_file="$OUTPUT_DIR/logs/${test_case_name}.log"
     local error_file="$OUTPUT_DIR/errors/${test_case_name}.error"
     
-    log_info "处理测试用例: $test_case_name"
+    log_info "Processing test case: $test_case_name"
     
-    # 检查测试用例目录是否存在
+    # Check if test case directory exists
     if [[ ! -d "$test_case_path" ]]; then
-        log_error "测试用例目录不存在: $test_case_path"
+        log_error "Test case directory does not exist: $test_case_path"
         echo "Directory not found: $test_case_path" > "$error_file"
         return 1
     fi
     
-    # 运行 devbox-pack 生成执行计划
-    # 使用临时文件来分离 stdout 和 stderr
+    # Run devbox-pack to generate execution plan
+    # Use temporary files to separate stdout and stderr
     local temp_output="$OUTPUT_DIR/temp_${test_case_name}.out"
     local temp_error="$OUTPUT_DIR/temp_${test_case_name}.err"
     
-    # 增加超时时间到 60 秒，某些复杂项目可能需要更多时间
+    # Increase timeout to 60 seconds, some complex projects may need more time
     if timeout 60s "$DEVBOX_PACK_BIN" "$test_case_path" --offline --format json > "$temp_output" 2> "$temp_error"; then
-        # 提取最后一行作为 JSON（假设 JSON 在最后一行）
+        # Extract last line as JSON (assuming JSON is on the last line)
         tail -n 1 "$temp_output" > "$plan_file"
         
-        # 验证生成的 JSON 计划
+        # Validate generated JSON plan
         if validate_json_plan "$plan_file" "$test_case_name"; then
-            log_success "✓ $test_case_name - 执行计划生成成功"
-            # 保存完整日志
+            log_success "✓ $test_case_name - Execution plan generated successfully"
+            # Save complete log
             cat "$temp_output" > "$log_file"
             rm -f "$temp_output" "$temp_error"
             return 0
         else
-            log_error "✗ $test_case_name - 生成的 JSON 格式无效"
-            # 保存错误信息
+            log_error "✗ $test_case_name - Generated JSON format is invalid"
+            # Save error information
             {
                 echo "JSON_VALIDATION_ERROR"
                 echo "=== STDOUT ==="
@@ -158,9 +158,9 @@ process_test_case() {
     else
         local exit_code=$?
         local error_type=$(analyze_error_type "$temp_error")
-        log_error "✗ $test_case_name - 执行失败 (退出码: $exit_code, 错误类型: $error_type)"
+        log_error "✗ $test_case_name - Execution failed (exit code: $exit_code, error type: $error_type)"
         
-        # 将错误信息保存到错误文件
+        # Save error information to error file
         {
             echo "Exit code: $exit_code"
             echo "Error type: $error_type"
@@ -170,17 +170,17 @@ process_test_case() {
             cat "$temp_output" 2>/dev/null || echo "No stdout output"
         } > "$error_file"
         
-        # 清理临时文件
+        # Clean up temporary files
         rm -f "$plan_file" "$temp_output" "$temp_error"
         return 1
     fi
 }
 
-# 生成验证报告
+# Generate validation report
 generate_validation_report() {
     local validation_data="{\"timestamp\":\"$(date -Iseconds)\",\"results\":[]}"
     
-    # 收集成功案例的验证信息
+    # Collect validation information for successful cases
     for plan_file in "$OUTPUT_DIR/plans"/*.json; do
         if [[ -f "$plan_file" ]]; then
             local case_name=$(basename "$plan_file" .json)
@@ -193,7 +193,7 @@ generate_validation_report() {
         fi
     done
     
-    # 收集失败案例的验证信息
+    # Collect validation information for failed cases
     for error_file in "$OUTPUT_DIR/errors"/*.error; do
         if [[ -f "$error_file" ]]; then
             local case_name=$(basename "$error_file" .error)
@@ -205,21 +205,21 @@ generate_validation_report() {
     done
     
     echo "$validation_data" | jq '.' > "$VALIDATION_REPORT"
-    log_info "验证报告生成完成: $VALIDATION_REPORT"
+    log_info "Validation report generated: $VALIDATION_REPORT"
 }
 
-# 生成详细分析报告
+# Generate detailed analysis report
 generate_analysis_report() {
     local total_cases=0
     local success_cases=0
     local failed_cases=0
     
-    # 统计结果
+    # Statistical results
     success_cases=$(find "$OUTPUT_DIR/plans" -name "*.json" | wc -l)
     failed_cases=$(find "$OUTPUT_DIR/errors" -name "*.error" | wc -l)
     total_cases=$((success_cases + failed_cases))
     
-    # 错误类型统计
+    # Error type statistics
     declare -A error_types
     for error_file in "$OUTPUT_DIR/errors"/*.error; do
         if [[ -f "$error_file" ]]; then
@@ -228,7 +228,7 @@ generate_analysis_report() {
         fi
     done
     
-    # Provider 统计
+    # Provider statistics
     declare -A provider_count
     declare -A provider_success
     for plan_file in "$OUTPUT_DIR/plans"/*.json; do
@@ -239,13 +239,13 @@ generate_analysis_report() {
         fi
     done
     
-    # 为失败的案例也统计 provider（如果能从目录名推断）
+    # Also count provider for failed cases (if can be inferred from directory name)
     for error_file in "$OUTPUT_DIR/errors"/*.error; do
         if [[ -f "$error_file" ]]; then
             local case_name=$(basename "$error_file" .error)
             local inferred_provider="unknown"
             
-            # 根据测试用例名称推断 provider
+            # Infer provider based on test case name
             if [[ "$case_name" == node-* ]]; then
                 inferred_provider="node"
             elif [[ "$case_name" == python-* ]]; then
@@ -274,23 +274,23 @@ generate_analysis_report() {
         fi
     done
     
-    # 生成详细分析报告
+    # Generate detailed analysis report
     cat > "$ANALYSIS_REPORT" << EOF
-# DevBox Pack 详细分析报告
+# DevBox Pack Detailed Analysis Report
 
-## 执行概览
+## Execution Overview
 
-- **测试时间**: $(date '+%Y-%m-%d %H:%M:%S')
-- **DevBox Pack 版本**: $($DEVBOX_PACK_BIN --version 2>/dev/null || echo "未知")
-- **总测试用例**: $total_cases
-- **成功**: $success_cases
-- **失败**: $failed_cases
-- **成功率**: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%
+- **Test Time**: $(date '+%Y-%m-%d %H:%M:%S')
+- **DevBox Pack Version**: $($DEVBOX_PACK_BIN --version 2>/dev/null || echo "Unknown")
+- **Total Test Cases**: $total_cases
+- **Successful**: $success_cases
+- **Failed**: $failed_cases
+- **Success Rate**: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%
 
-## Provider 详细统计
+## Provider Detailed Statistics
 
-| Provider | 总数 | 成功 | 失败 | 成功率 |
-|----------|------|------|------|--------|
+| Provider | Total | Success | Failed | Success Rate |
+|----------|-------|---------|--------|--------------|
 EOF
 
     for provider in $(printf '%s\n' "${!provider_count[@]}" | sort); do
@@ -303,13 +303,13 @@ EOF
     
     cat >> "$ANALYSIS_REPORT" << EOF
 
-## 错误类型分析
+## Error Type Analysis
 
 EOF
 
     if [[ ${#error_types[@]} -gt 0 ]]; then
-        echo "| 错误类型 | 数量 | 占比 |" >> "$ANALYSIS_REPORT"
-        echo "|----------|------|------|" >> "$ANALYSIS_REPORT"
+        echo "| Error Type | Count | Percentage |" >> "$ANALYSIS_REPORT"
+        echo "|------------|-------|------------|" >> "$ANALYSIS_REPORT"
         
         for error_type in "${!error_types[@]}"; do
             local count=${error_types[$error_type]}
@@ -317,12 +317,12 @@ EOF
             echo "| $error_type | $count | ${percentage}% |" >> "$ANALYSIS_REPORT"
         done
     else
-        echo "无错误发生" >> "$ANALYSIS_REPORT"
+        echo "No errors occurred" >> "$ANALYSIS_REPORT"
     fi
     
     cat >> "$ANALYSIS_REPORT" << EOF
 
-## 成功的测试用例
+## Successful Test Cases
 
 EOF
 
@@ -337,12 +337,12 @@ EOF
             fi
         done
     else
-        echo "无成功的测试用例" >> "$ANALYSIS_REPORT"
+        echo "No successful test cases" >> "$ANALYSIS_REPORT"
     fi
     
     cat >> "$ANALYSIS_REPORT" << EOF
 
-## 失败的测试用例详情
+## Failed Test Cases Details
 
 EOF
 
@@ -352,41 +352,41 @@ EOF
                 local case_name=$(basename "$error_file" .error)
                 local error_type=$(analyze_error_type "$error_file")
                 local error_preview=$(head -n 5 "$error_file" | tail -n +3 | tr '\n' ' ' | cut -c1-100)
-                echo "- **$case_name** (错误类型: $error_type)" >> "$ANALYSIS_REPORT"
-                echo "  - 错误详情: $error_preview..." >> "$ANALYSIS_REPORT"
+                echo "- **$case_name** (Error Type: $error_type)" >> "$ANALYSIS_REPORT"
+                echo "  - Error Details: $error_preview..." >> "$ANALYSIS_REPORT"
                 echo "" >> "$ANALYSIS_REPORT"
             fi
         done
     else
-        echo "无失败的测试用例" >> "$ANALYSIS_REPORT"
+        echo "No failed test cases" >> "$ANALYSIS_REPORT"
     fi
     
     cat >> "$ANALYSIS_REPORT" << EOF
 
-## 建议和改进方向
+## Recommendations and Improvement Directions
 
-### 高优先级问题
+### High Priority Issues
 EOF
 
-    # 分析主要问题并给出建议
+    # Analyze main issues and provide recommendations
     local detection_failures=${error_types["DETECTION_FAILURE"]:-0}
     local file_read_errors=${error_types["FILE_READ_ERROR"]:-0}
     
     if [[ $detection_failures -gt 0 ]]; then
         cat >> "$ANALYSIS_REPORT" << EOF
-- **语言/框架检测失败** ($detection_failures 个案例): 需要改进检测逻辑，可能是配置文件缺失或检测规则不完整
+- **Language/Framework Detection Failure** ($detection_failures cases): Need to improve detection logic, possibly due to missing configuration files or incomplete detection rules
 EOF
     fi
     
     if [[ $file_read_errors -gt 0 ]]; then
         cat >> "$ANALYSIS_REPORT" << EOF
-- **文件读取错误** ($file_read_errors 个案例): 检查文件权限和路径配置
+- **File Read Errors** ($file_read_errors cases): Check file permissions and path configuration
 EOF
     fi
     
     cat >> "$ANALYSIS_REPORT" << EOF
 
-### Provider 特定建议
+### Provider-Specific Recommendations
 EOF
 
     for provider in "${!provider_count[@]}"; do
@@ -395,44 +395,44 @@ EOF
         local success_rate=$(( total > 0 ? success * 100 / total : 0 ))
         
         if [[ $success_rate -lt 80 && $total -gt 1 ]]; then
-            echo "- **$provider**: 成功率较低 (${success_rate}%)，需要重点关注和改进" >> "$ANALYSIS_REPORT"
+            echo "- **$provider**: Low success rate (${success_rate}%), needs focused attention and improvement" >> "$ANALYSIS_REPORT"
         fi
     done
     
-    log_success "详细分析报告生成完成: $ANALYSIS_REPORT"
+    log_success "Detailed analysis report generated: $ANALYSIS_REPORT"
 }
 
-# 生成统计报告
+# Generate summary report
 generate_summary() {
     local total_cases=0
     local success_cases=0
     local failed_cases=0
     local summary_file="$OUTPUT_DIR/summary.md"
     
-    log_info "生成统计报告..."
+    log_info "Generating summary report..."
     
-    # 统计结果
+    # Statistical results
     success_cases=$(find "$OUTPUT_DIR/plans" -name "*.json" | wc -l)
     failed_cases=$(find "$OUTPUT_DIR/errors" -name "*.error" | wc -l)
     total_cases=$((success_cases + failed_cases))
     
-    # 生成 Markdown 报告
+    # Generate Markdown report
     cat > "$summary_file" << EOF
-# DevBox Pack 批量测试报告
+# DevBox Pack Batch Test Report
 
-## 测试概览
+## Test Overview
 
-- **测试时间**: $(date '+%Y-%m-%d %H:%M:%S')
-- **总测试用例**: $total_cases
-- **成功**: $success_cases
-- **失败**: $failed_cases
-- **成功率**: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%
+- **Test Time**: $(date '+%Y-%m-%d %H:%M:%S')
+- **Total Test Cases**: $total_cases
+- **Successful**: $success_cases
+- **Failed**: $failed_cases
+- **Success Rate**: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%
 
-## 成功的测试用例
+## Successful Test Cases
 
 EOF
 
-    # 列出成功的测试用例
+    # List successful test cases
     if [[ $success_cases -gt 0 ]]; then
         for plan_file in "$OUTPUT_DIR/plans"/*.json; do
             if [[ -f "$plan_file" ]]; then
@@ -442,14 +442,14 @@ EOF
             fi
         done
     else
-        echo "无成功的测试用例" >> "$summary_file"
+        echo "No successful test cases" >> "$summary_file"
     fi
     
     echo "" >> "$summary_file"
-    echo "## 失败的测试用例" >> "$summary_file"
+    echo "## Failed Test Cases" >> "$summary_file"
     echo "" >> "$summary_file"
     
-    # 列出失败的测试用例
+    # List failed test cases
     if [[ $failed_cases -gt 0 ]]; then
         for error_file in "$OUTPUT_DIR/errors"/*.error; do
             if [[ -f "$error_file" ]]; then
@@ -459,12 +459,12 @@ EOF
             fi
         done
     else
-        echo "无失败的测试用例" >> "$summary_file"
+        echo "No failed test cases" >> "$summary_file"
     fi
     
-    # 按 Provider 分组统计
+    # Group statistics by Provider
     echo "" >> "$summary_file"
-    echo "## Provider 统计" >> "$summary_file"
+    echo "## Provider Statistics" >> "$summary_file"
     echo "" >> "$summary_file"
     
     declare -A provider_count
@@ -476,82 +476,82 @@ EOF
     done
     
     for provider in "${!provider_count[@]}"; do
-        echo "- **$provider**: ${provider_count[$provider]} 个测试用例" >> "$summary_file"
+        echo "- **$provider**: ${provider_count[$provider]} test cases" >> "$summary_file"
     done
     
-    # 生成验证报告和详细分析报告
+    # Generate validation report and detailed analysis report
     generate_validation_report
     generate_analysis_report
     
-    log_success "统计报告生成完成: $summary_file"
+    log_success "Summary report generated: $summary_file"
     
-    # 在控制台输出摘要
+    # Output summary to console
     echo ""
-    log_info "=== 测试结果摘要 ==="
-    log_info "总测试用例: $total_cases"
-    log_success "成功: $success_cases"
-    log_error "失败: $failed_cases"
-    log_info "成功率: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%"
+    log_info "=== Test Results Summary ==="
+    log_info "Total test cases: $total_cases"
+    log_success "Successful: $success_cases"
+    log_error "Failed: $failed_cases"
+    log_info "Success rate: $(( total_cases > 0 ? success_cases * 100 / total_cases : 0 ))%"
     echo ""
-    log_info "详细报告文件:"
-    log_info "- 基础报告: $summary_file"
-    log_info "- 验证报告: $VALIDATION_REPORT"
-    log_info "- 分析报告: $ANALYSIS_REPORT"
+    log_info "Detailed report files:"
+    log_info "- Basic report: $summary_file"
+    log_info "- Validation report: $VALIDATION_REPORT"
+    log_info "- Analysis report: $ANALYSIS_REPORT"
 }
 
-# 主函数
+# Main function
 main() {
-    log_info "开始 DevBox Pack 批量测试..."
-    log_info "DevBox Pack 二进制文件: $DEVBOX_PACK_BIN"
-    log_info "测试用例目录: $EXAMPLES_DIR"
-    log_info "输出目录: $OUTPUT_DIR"
+    log_info "Starting DevBox Pack batch testing..."
+    log_info "DevBox Pack binary: $DEVBOX_PACK_BIN"
+    log_info "Test cases directory: $EXAMPLES_DIR"
+    log_info "Output directory: $OUTPUT_DIR"
     
-    # 检查 devbox-pack 是否存在
+    # Check if devbox-pack exists
     if [[ ! -x "$DEVBOX_PACK_BIN" ]]; then
-        log_error "DevBox Pack 二进制文件不存在或不可执行: $DEVBOX_PACK_BIN"
+        log_error "DevBox Pack binary does not exist or is not executable: $DEVBOX_PACK_BIN"
         exit 1
     fi
     
-    # 检查测试用例目录是否存在
+    # Check if test cases directory exists
     if [[ ! -d "$EXAMPLES_DIR" ]]; then
-        log_error "测试用例目录不存在: $EXAMPLES_DIR"
+        log_error "Test cases directory does not exist: $EXAMPLES_DIR"
         exit 1
     fi
     
-    # 创建输出目录
+    # Create output directories
     create_output_dirs
     
-    # 获取所有测试用例
+    # Get all test cases
     local test_cases
     test_cases=$(get_test_cases)
     local total_count=$(echo "$test_cases" | wc -l)
     
-    log_info "发现 $total_count 个测试用例"
+    log_info "Found $total_count test cases"
     
-    # 处理每个测试用例
+    # Process each test case
     local current=0
     while IFS= read -r test_case_path; do
         current=$((current + 1))
         local test_case_name=$(basename "$test_case_path")
         
-        log_info "[$current/$total_count] 处理: $test_case_name"
+        log_info "[$current/$total_count] Processing: $test_case_name"
         
         if ! process_test_case "$test_case_path"; then
-            log_warning "测试用例处理失败: $test_case_name"
+            log_warning "Test case processing failed: $test_case_name"
         fi
         
-        # 显示进度
+        # Show progress
         local progress=$((current * 100 / total_count))
-        log_info "进度: $progress% ($current/$total_count)"
+        log_info "Progress: $progress% ($current/$total_count)"
         
     done <<< "$test_cases"
     
-    # 生成统计报告
+    # Generate summary report
     generate_summary
     
-    log_success "批量测试完成！"
-    log_info "结果保存在: $OUTPUT_DIR"
+    log_success "Batch testing completed!"
+    log_info "Results saved in: $OUTPUT_DIR"
 }
 
-# 运行主函数
+# Run main function
 main "$@"

@@ -1,3 +1,5 @@
+// Package git provides Git repository handling functionality
+// for the DevBox Pack execution plan generator.
 package git
 
 import (

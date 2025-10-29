@@ -1,3 +1,4 @@
+// Package types defines the core data structures and types used throughout the DevBox Pack system.
 package types
 
 import (
@@ -29,7 +30,7 @@ type ExecutionPlan struct {
 	Evidence Evidence `json:"evidence,omitempty"`
 }
 
-// Base environment configuration
+// BaseConfig represents the base environment configuration for a project.
 type BaseConfig struct {
 	// Base image name
 	Name string `json:"name"`
@@ -226,24 +227,35 @@ func NewDevBoxPackError(message, code string, details interface{}) *DevBoxPackEr
 type SupportedLanguage string
 
 const (
-	LanguageNode   SupportedLanguage = "node"
+	// LanguageNode represents the Node.js language
+	LanguageNode SupportedLanguage = "node"
+	// LanguagePython represents the Python language
 	LanguagePython SupportedLanguage = "python"
-	LanguageJava   SupportedLanguage = "java"
-	LanguageGo     SupportedLanguage = "go"
-	LanguagePHP    SupportedLanguage = "php"
-	LanguageRuby   SupportedLanguage = "ruby"
-
-	LanguageDeno       SupportedLanguage = "deno"
-	LanguageRust       SupportedLanguage = "rust"
+	// LanguageJava represents the Java language
+	LanguageJava SupportedLanguage = "java"
+	// LanguageGo represents the Go language
+	LanguageGo SupportedLanguage = "go"
+	// LanguagePHP represents the PHP language
+	LanguagePHP SupportedLanguage = "php"
+	// LanguageRuby represents the Ruby language
+	LanguageRuby SupportedLanguage = "ruby"
+	// LanguageDeno represents the Deno runtime
+	LanguageDeno SupportedLanguage = "deno"
+	// LanguageRust represents the Rust language
+	LanguageRust SupportedLanguage = "rust"
+	// LanguageStaticfile represents static file serving
 	LanguageStaticfile SupportedLanguage = "staticfile"
-	LanguageShell      SupportedLanguage = "shell"
+	// LanguageShell represents shell scripts
+	LanguageShell SupportedLanguage = "shell"
 )
 
 // OutputFormat represents output format types
 type OutputFormat string
 
 const (
-	OutputFormatJSON   OutputFormat = "json"
+	// OutputFormatJSON represents JSON output format
+	OutputFormatJSON OutputFormat = "json"
+	// OutputFormatPretty represents human-readable pretty output format
 	OutputFormatPretty OutputFormat = "pretty"
 )
 
@@ -251,8 +263,12 @@ const (
 type Platform string
 
 const (
-	PlatformLinuxAMD64  Platform = "linux/amd64"
-	PlatformLinuxARM64  Platform = "linux/arm64"
+	// PlatformLinuxAMD64 represents Linux AMD64 platform
+	PlatformLinuxAMD64 Platform = "linux/amd64"
+	// PlatformLinuxARM64 represents Linux ARM64 platform
+	PlatformLinuxARM64 Platform = "linux/arm64"
+	// PlatformDarwinAMD64 represents macOS AMD64 platform
 	PlatformDarwinAMD64 Platform = "darwin/amd64"
+	// PlatformDarwinARM64 represents macOS ARM64 platform
 	PlatformDarwinARM64 Platform = "darwin/arm64"
 )

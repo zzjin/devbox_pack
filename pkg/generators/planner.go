@@ -1,7 +1,5 @@
-/**
- * DevBox Pack execution plan generator
- */
-
+// Package generators provides execution plan generation functionality
+// for the DevBox Pack system.
 package generators
 
 import (
@@ -10,6 +8,11 @@ import (
 	"github.com/labring/devbox-pack/pkg/registry"
 	"github.com/labring/devbox-pack/pkg/types"
 	"github.com/labring/devbox-pack/pkg/utils"
+)
+
+const (
+	// DefaultPort is the default port used when no language-specific port is configured
+	DefaultPort = 8000
 )
 
 // ExecutionPlanGenerator execution plan generator
@@ -86,7 +89,7 @@ func (g *ExecutionPlanGenerator) selectBestResult(results []types.DetectResult) 
 }
 
 // generateRuntime generates runtime configuration
-func (g *ExecutionPlanGenerator) generateRuntime(result *types.DetectResult, options types.CLIOptions) types.RuntimeConfig {
+func (g *ExecutionPlanGenerator) generateRuntime(result *types.DetectResult, _ types.CLIOptions) types.RuntimeConfig {
 	version := g.getDefaultVersion(types.SupportedLanguage(result.Language))
 
 	// If there is version information in the detection result, use the detected version
@@ -107,7 +110,7 @@ func (g *ExecutionPlanGenerator) generateRuntime(result *types.DetectResult, opt
 }
 
 // generateBase generates base configuration
-func (g *ExecutionPlanGenerator) generateBase(result *types.DetectResult, options types.CLIOptions) types.BaseConfig {
+func (g *ExecutionPlanGenerator) generateBase(result *types.DetectResult, _ types.CLIOptions) types.BaseConfig {
 	base := types.BaseConfig{}
 
 	// Get base image from catalog
@@ -121,7 +124,7 @@ func (g *ExecutionPlanGenerator) generateBase(result *types.DetectResult, option
 }
 
 // generateAptDependencies generates apt dependencies
-func (g *ExecutionPlanGenerator) generateAptDependencies(result *types.DetectResult, options types.CLIOptions) []string {
+func (g *ExecutionPlanGenerator) generateAptDependencies(result *types.DetectResult, _ types.CLIOptions) []string {
 	var deps []string
 
 	// Check if native compilation is needed
@@ -136,6 +139,20 @@ func (g *ExecutionPlanGenerator) generateAptDependencies(result *types.DetectRes
 			deps = append(deps, "node-gyp")
 		case types.LanguageRuby:
 			deps = append(deps, "ruby-dev", "libsqlite3-dev")
+		case types.LanguageJava:
+			// Java typically doesn't need additional native compilation deps
+		case types.LanguageGo:
+			// Go typically doesn't need additional native compilation deps
+		case types.LanguagePHP:
+			deps = append(deps, "php-dev")
+		case types.LanguageDeno:
+			// Deno typically doesn't need additional native compilation deps
+		case types.LanguageRust:
+			deps = append(deps, "build-essential")
+		case types.LanguageStaticfile:
+			// Static files don't need compilation deps
+		case types.LanguageShell:
+			// Shell scripts don't need compilation deps
 		}
 	}
 
@@ -172,7 +189,7 @@ func (g *ExecutionPlanGenerator) getPortForResult(result *types.DetectResult) in
 	if port, exists := g.defaultPorts[types.SupportedLanguage(result.Language)]; exists {
 		return port
 	}
-	return 8000 // Default port
+	return DefaultPort
 }
 
 // getDefaultVersion gets the default version for a language

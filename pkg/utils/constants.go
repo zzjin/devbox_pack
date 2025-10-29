@@ -1,7 +1,5 @@
-/**
- * DevBox Pack Execution Plan Generator - Constants Definition
- */
-
+// Package utils provides constants and configuration values
+// for the DevBox Pack execution plan generator.
 package utils
 
 import (

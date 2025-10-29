@@ -1,3 +1,5 @@
+// Package service provides the main DevBox Pack service functionality
+// for generating execution plans from project repositories.
 package service
 
 import (

@@ -1,7 +1,5 @@
-/**
- * DevBox Pack Execution Plan Generator - Provider Base Class
- */
-
+// Package providers contains the language and framework detection providers
+// for the DevBox Pack execution plan generator.
 package providers
 
 import (

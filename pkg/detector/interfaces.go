@@ -1,7 +1,5 @@
-/**
- * DevBox Pack Execution Plan Generator - Provider Interface Definition
- */
-
+// Package detector provides interfaces and engine for detecting project types
+// and generating execution plans for the DevBox Pack system.
 package detector
 
 import (

@@ -1,3 +1,5 @@
+// Package cli provides command-line interface functionality
+// for the DevBox Pack execution plan generator.
 package cli
 
 import (

@@ -1,7 +1,4 @@
-/**
- * DevBox Pack Execution Plan Generator - Main Entry File
- */
-
+// Package main is the entry point for the DevBox Pack execution plan generator CLI tool.
 package main
 
 import (
