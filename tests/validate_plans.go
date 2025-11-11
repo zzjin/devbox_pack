@@ -10,33 +10,35 @@ import (
 	"strings"
 )
 
-// ExecutionPlan execution plan structure
+// ExecutionPlan execution plan structure (current)
 type ExecutionPlan struct {
-	Provider string `json:"provider"`
-	Base     struct {
-		Name     string `json:"name"`
-		Platform string `json:"platform"`
-	} `json:"base"`
-	Runtime struct {
-		Language string                 `json:"language"`
-		Version  string                 `json:"version"`
-		Tools    interface{}            `json:"tools"`
-		Env      map[string]interface{} `json:"env"`
-	} `json:"runtime"`
-	Apt      interface{} `json:"apt"`
-	AptDeps  interface{} `json:"aptDeps"`
-	Dev      *Command    `json:"dev"`
-	Build    *Command    `json:"build"`
-	Start    *Command    `json:"start"`
-	Commands struct {
-		Dev   []string `json:"dev"`
-		Build []string `json:"build"`
-		Start []string `json:"start"`
-	} `json:"commands"`
-	Evidence struct {
-		Files  interface{} `json:"files"`
-		Reason string      `json:"reason"`
-	} `json:"evidence"`
+	Provider    string            `json:"provider"`
+	Runtime     RuntimeConfig     `json:"runtime"`
+	Environment map[string]string `json:"environment,omitempty"`
+	Apt         []string          `json:"apt,omitempty"`
+	Commands    Commands          `json:"commands"`
+	Port        int               `json:"port"`
+	Evidence    Evidence          `json:"evidence,omitempty"`
+}
+
+// RuntimeConfig represents the simplified runtime configuration
+type RuntimeConfig struct {
+	Image     string  `json:"image"`
+	Framework *string `json:"framework,omitempty"`
+}
+
+// Commands represents the command configuration
+type Commands struct {
+	Setup []string `json:"setup,omitempty"`
+	Dev   []string `json:"dev,omitempty"`
+	Build []string `json:"build,omitempty"`
+	Run   []string `json:"run,omitempty"`
+}
+
+// Evidence represents detection evidence
+type Evidence struct {
+	Files  []string `json:"files,omitempty"`
+	Reason string   `json:"reason,omitempty"`
 }
 
 // Command command structure
@@ -121,95 +123,40 @@ func (v *PlanValidator) ValidatePlan(testCase string, plan *ExecutionPlan) Valid
 		result.Valid = false
 	}
 
-	// Validate base image
-	if plan.Base.Name == "" {
-		result.Errors = append(result.Errors, "base image name cannot be empty")
-		result.Valid = false
+	// Validate runtime image
+	if plan.Runtime.Image == "" {
+		result.Warnings = append(result.Warnings, "runtime image is empty (will be set by generator)")
 	}
 
-	// Validate runtime
-	if plan.Runtime.Language == "" {
-		result.Errors = append(result.Errors, "runtime language cannot be empty")
-		result.Valid = false
+	// Check commands structure
+	if len(plan.Commands.Setup) == 0 {
+		result.Warnings = append(result.Warnings, "setup command list is empty")
 	}
-
-	// Validate tools
-	if knownTools, exists := v.knownCommands[plan.Provider]; exists {
-		if tools, ok := plan.Runtime.Tools.([]interface{}); ok {
-			for _, tool := range tools {
-				if toolStr, ok := tool.(string); ok {
-					if toolStr == "" {
-						result.Warnings = append(result.Warnings, "detected empty tool name")
-						continue
-					}
-					found := false
-					for _, knownTool := range knownTools {
-						if strings.Contains(toolStr, knownTool) {
-							found = true
-							break
-						}
-					}
-					if !found {
-						result.Warnings = append(result.Warnings, fmt.Sprintf("unknown tool: %s (Provider: %s)", toolStr, plan.Provider))
-					}
-				}
-			}
-		}
+	if len(plan.Commands.Dev) == 0 {
+		result.Warnings = append(result.Warnings, "dev command list is empty")
 	}
-
-	// Check commands - prioritize Commands field, if empty then check traditional fields
-	hasCommands := len(plan.Commands.Dev) > 0 || len(plan.Commands.Build) > 0 || len(plan.Commands.Start) > 0
-
-	if !hasCommands {
-		// If Commands field is empty, check traditional fields
-		if plan.Dev == nil || plan.Dev.Cmd == "" {
-			result.Errors = append(result.Errors, "dev command cannot be empty")
-			result.Valid = false
-		}
-
-		if plan.Build == nil || plan.Build.Cmd == "" {
-			result.Errors = append(result.Errors, "build command cannot be empty")
-			result.Valid = false
-		}
-
-		if plan.Start == nil || plan.Start.Cmd == "" {
-			result.Errors = append(result.Errors, "start command cannot be empty")
-			result.Valid = false
-		}
-	} else {
-		// If Commands field has content, validate its completeness
-		if len(plan.Commands.Dev) == 0 {
-			result.Warnings = append(result.Warnings, "dev command list is empty")
-		}
-		if len(plan.Commands.Build) == 0 {
-			result.Warnings = append(result.Warnings, "build command list is empty")
-		}
-		if len(plan.Commands.Start) == 0 {
-			result.Warnings = append(result.Warnings, "start command list is empty")
-		}
+	if len(plan.Commands.Build) == 0 {
+		result.Warnings = append(result.Warnings, "build command list is empty")
+	}
+	if len(plan.Commands.Run) == 0 {
+		result.Warnings = append(result.Warnings, "run command list is empty")
 	}
 
 	// Check port configuration
 	hasPortConfig := false
-	if hasCommands {
-		// Check port configuration in Commands field
-		for _, cmd := range plan.Commands.Start {
-			if strings.Contains(cmd, "PORT") || strings.Contains(cmd, "port") {
-				hasPortConfig = true
-				break
-			}
+	for _, cmd := range plan.Commands.Run {
+		if strings.Contains(cmd, "PORT") || strings.Contains(cmd, "port") {
+			hasPortConfig = true
+			break
 		}
-	} else if plan.Start != nil && plan.Start.Cmd != "" {
-		// Check port configuration in traditional field
-		hasPortConfig = strings.Contains(plan.Start.Cmd, "PORT") || strings.Contains(plan.Start.Cmd, "port")
 	}
 
-	if !hasPortConfig && (hasCommands && len(plan.Commands.Start) > 0 || !hasCommands && plan.Start != nil && plan.Start.Cmd != "") {
-		result.Warnings = append(result.Warnings, "start command lacks port environment variable")
+	if !hasPortConfig && len(plan.Commands.Run) > 0 {
+		result.Warnings = append(result.Warnings, "run command lacks port environment variable")
 	}
 
 	// Validate evidence files
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "no evidence files detected")
 	}
 
@@ -237,7 +184,7 @@ func (v *PlanValidator) validateProviderSpecific(plan *ExecutionPlan, result *Va
 
 // validateNodeProject validates Node.js project
 func (v *PlanValidator) validateNodeProject(plan *ExecutionPlan, result *ValidationResult) {
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "Node.js project lacks package.json file")
 		result.Warnings = append(result.Warnings, "Node.js project lacks lock file")
 		return
@@ -245,12 +192,10 @@ func (v *PlanValidator) validateNodeProject(plan *ExecutionPlan, result *Validat
 
 	// Check if package.json exists
 	hasPackageJSON := false
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok && strings.Contains(fileStr, "package.json") {
-				hasPackageJSON = true
-				break
-			}
+	for _, file := range plan.Evidence.Files {
+		if strings.Contains(file, "package.json") {
+			hasPackageJSON = true
+			break
 		}
 	}
 	if !hasPackageJSON {
@@ -260,19 +205,15 @@ func (v *PlanValidator) validateNodeProject(plan *ExecutionPlan, result *Validat
 	// Check consistency between tools and lock files
 	hasLockFile := false
 	lockFiles := []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"}
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok {
-				for _, lockFile := range lockFiles {
-					if strings.Contains(fileStr, lockFile) {
-						hasLockFile = true
-						break
-					}
-				}
-				if hasLockFile {
-					break
-				}
+	for _, file := range plan.Evidence.Files {
+		for _, lockFile := range lockFiles {
+			if strings.Contains(file, lockFile) {
+				hasLockFile = true
+				break
 			}
+		}
+		if hasLockFile {
+			break
 		}
 	}
 	if !hasLockFile {
@@ -282,24 +223,20 @@ func (v *PlanValidator) validateNodeProject(plan *ExecutionPlan, result *Validat
 
 // validatePythonProject validates Python project
 func (v *PlanValidator) validatePythonProject(plan *ExecutionPlan, result *ValidationResult) {
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "Python project lacks dependency files")
 		return
 	}
 
 	// Check dependency files
 	hasDepsFile := false
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok {
-				if strings.Contains(fileStr, "requirements.txt") ||
-					strings.Contains(fileStr, "pyproject.toml") ||
-					strings.Contains(fileStr, "Pipfile") ||
-					strings.Contains(fileStr, "poetry.lock") {
-					hasDepsFile = true
-					break
-				}
-			}
+	for _, file := range plan.Evidence.Files {
+		if strings.Contains(file, "requirements.txt") ||
+			strings.Contains(file, "pyproject.toml") ||
+			strings.Contains(file, "Pipfile") ||
+			strings.Contains(file, "poetry.lock") {
+			hasDepsFile = true
+			break
 		}
 	}
 	if !hasDepsFile {
@@ -309,21 +246,17 @@ func (v *PlanValidator) validatePythonProject(plan *ExecutionPlan, result *Valid
 
 // validateJavaProject validates Java project
 func (v *PlanValidator) validateJavaProject(plan *ExecutionPlan, result *ValidationResult) {
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "Java project lacks build files (pom.xml or build.gradle)")
 		return
 	}
 
 	// Check build files
 	hasBuildFile := false
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok {
-				if strings.Contains(fileStr, "pom.xml") || strings.Contains(fileStr, "build.gradle") {
-					hasBuildFile = true
-					break
-				}
-			}
+	for _, file := range plan.Evidence.Files {
+		if strings.Contains(file, "pom.xml") || strings.Contains(file, "build.gradle") {
+			hasBuildFile = true
+			break
 		}
 	}
 	if !hasBuildFile {
@@ -333,41 +266,48 @@ func (v *PlanValidator) validateJavaProject(plan *ExecutionPlan, result *Validat
 
 // validateGoProject validates Go project
 func (v *PlanValidator) validateGoProject(plan *ExecutionPlan, result *ValidationResult) {
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "Go project lacks go.mod file")
 		return
 	}
 
 	// Check go.mod
 	hasGoMod := false
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok && strings.Contains(fileStr, "go.mod") {
-				hasGoMod = true
-				break
-			}
+	for _, file := range plan.Evidence.Files {
+		if strings.Contains(file, "go.mod") {
+			hasGoMod = true
+			break
 		}
 	}
 	if !hasGoMod {
 		result.Warnings = append(result.Warnings, "Go project lacks go.mod file")
 	}
+
+	// Check for required environment variables
+	if _, exists := plan.Environment["GO_ENV"]; !exists {
+		result.Warnings = append(result.Warnings, "Go project missing GO_ENV environment variable")
+	}
+	if _, exists := plan.Environment["CGO_ENABLED"]; !exists {
+		result.Warnings = append(result.Warnings, "Go project missing CGO_ENABLED environment variable")
+	}
+	if _, exists := plan.Environment["PORT"]; !exists {
+		result.Warnings = append(result.Warnings, "Go project missing PORT environment variable")
+	}
 }
 
 // validateRustProject validates Rust project
 func (v *PlanValidator) validateRustProject(plan *ExecutionPlan, result *ValidationResult) {
-	if plan.Evidence.Files == nil {
+	if len(plan.Evidence.Files) == 0 {
 		result.Warnings = append(result.Warnings, "Rust project lacks Cargo.toml file")
 		return
 	}
 
 	// Check Cargo.toml
 	hasCargoToml := false
-	if files, ok := plan.Evidence.Files.([]interface{}); ok {
-		for _, file := range files {
-			if fileStr, ok := file.(string); ok && strings.Contains(fileStr, "Cargo.toml") {
-				hasCargoToml = true
-				break
-			}
+	for _, file := range plan.Evidence.Files {
+		if strings.Contains(file, "Cargo.toml") {
+			hasCargoToml = true
+			break
 		}
 	}
 	if !hasCargoToml {

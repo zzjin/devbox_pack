@@ -47,11 +47,11 @@ func (g *ExecutionPlanGenerator) GeneratePlan(results []types.DetectResult, opti
 
 	// Generate execution plan
 	plan := &types.ExecutionPlan{
-		Provider: bestResult.Language,
-		Runtime:  g.generateRuntime(bestResult, options),
-		Base:     g.generateBase(bestResult, options),
-		Commands: g.generateCommands(bestResult, options),
-		Port:     g.getPortForResult(bestResult),
+		Provider:    bestResult.Language,
+		Runtime:     g.generateRuntime(bestResult, options),
+		Environment: g.generateEnvironment(bestResult, options),
+		Commands:    g.generateCommands(bestResult, options),
+		Port:        g.getPortForResult(bestResult),
 	}
 
 	// Add Apt dependencies only when there are values
@@ -68,59 +68,110 @@ func (g *ExecutionPlanGenerator) GeneratePlan(results []types.DetectResult, opti
 	return plan, nil
 }
 
-// selectBestResult selects the best detection result
+// selectBestResult selects the best detection result with backend-first priority
 func (g *ExecutionPlanGenerator) selectBestResult(results []types.DetectResult) *types.DetectResult {
 	if len(results) == 0 {
 		return nil
 	}
 
-	var bestResult *types.DetectResult
-	maxConfidence := 0.0
+	// Separate backend and frontend results
+	var backendResults []*types.DetectResult
+	var frontendResults []*types.DetectResult
 
 	for i := range results {
 		result := &results[i]
-		if result.Confidence > maxConfidence {
-			maxConfidence = result.Confidence
-			bestResult = result
+		if g.isBackendFramework(result) {
+			backendResults = append(backendResults, result)
+		} else {
+			frontendResults = append(frontendResults, result)
 		}
 	}
 
-	return bestResult
+	// Prioritize backend frameworks for full-stack applications
+	if len(backendResults) > 0 {
+		// Return backend result with highest confidence
+		bestBackend := backendResults[0]
+		for _, result := range backendResults[1:] {
+			if result.Confidence > bestBackend.Confidence {
+				bestBackend = result
+			}
+		}
+		return bestBackend
+	}
+
+	// If no backend results, return frontend result with highest confidence
+	bestFrontend := frontendResults[0]
+	for _, result := range frontendResults[1:] {
+		if result.Confidence > bestFrontend.Confidence {
+			bestFrontend = result
+		}
+	}
+	return bestFrontend
 }
 
-// generateRuntime generates runtime configuration
+// isBackendFramework checks if a detection result represents a backend framework
+func (g *ExecutionPlanGenerator) isBackendFramework(result *types.DetectResult) bool {
+	backendLanguages := []string{"php", "python", "java", "go", "ruby", "rust"}
+
+	// Check if language is backend
+	for _, lang := range backendLanguages {
+		if result.Language == lang {
+			return true
+		}
+	}
+
+	// Specific backend frameworks that might be detected in other languages
+	backendFrameworks := []string{
+		"Laravel", "Symfony", "Django", "Flask", "FastAPI", "Spring Boot",
+		"Ruby on Rails", "Express", "Koa", "NestJS", "Gin", "Echo", "Fiber",
+	}
+
+	for _, framework := range backendFrameworks {
+		if result.Framework == framework {
+			return true
+		}
+	}
+
+	return false
+}
+
+// generateRuntime generates simplified runtime configuration
 func (g *ExecutionPlanGenerator) generateRuntime(result *types.DetectResult, _ types.CLIOptions) types.RuntimeConfig {
-	version := g.getDefaultVersion(types.SupportedLanguage(result.Language))
+	runtime := types.RuntimeConfig{}
 
-	// If there is version information in the detection result, use the detected version
-	if result.Version != "" {
-		version = &result.Version
+	// Get base image from catalog using detected version
+	if catalog, exists := g.baseCatalog[types.SupportedLanguage(result.Language)]; exists {
+		version := result.Version
+		if version == "" {
+			// Use default version if none detected
+			if defaultVersion, exists := g.defaultVersions[types.SupportedLanguage(result.Language)]; exists {
+				version = defaultVersion
+			}
+		}
+
+		if version != "" {
+			if image, exists := catalog[version]; exists {
+				runtime.Image = image
+			}
+		}
 	}
 
-	runtime := types.RuntimeConfig{
-		Language: result.Language,
-	}
-
-	// Add version only when there is a value
-	if version != nil {
-		runtime.Version = version
+	// Add framework if detected
+	if result.Framework != "" {
+		runtime.Framework = &result.Framework
 	}
 
 	return runtime
 }
 
-// generateBase generates base configuration
-func (g *ExecutionPlanGenerator) generateBase(result *types.DetectResult, _ types.CLIOptions) types.BaseConfig {
-	base := types.BaseConfig{}
-
-	// Get base image from catalog
-	if catalog, exists := g.baseCatalog[types.SupportedLanguage(result.Language)]; exists {
-		if image, exists := catalog["image"]; exists {
-			base.Name = image
-		}
+// generateEnvironment generates environment variables (flattened)
+func (g *ExecutionPlanGenerator) generateEnvironment(result *types.DetectResult, _ types.CLIOptions) map[string]string {
+	provider := g.registry.GetProvider(result.Language)
+	if provider == nil {
+		return nil
 	}
 
-	return base
+	return provider.GenerateEnvironment(result)
 }
 
 // generateAptDependencies generates apt dependencies

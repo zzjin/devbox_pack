@@ -11,17 +11,17 @@ type ExecutionPlan struct {
 	// Provider name that was matched
 	Provider string `json:"provider"`
 
-	// Base environment configuration
-	Base BaseConfig `json:"base"`
-
 	// Runtime configuration
 	Runtime RuntimeConfig `json:"runtime"`
+
+	// Environment variables (flattened)
+	Environment map[string]string `json:"environment,omitempty"`
 
 	// System packages to install
 	Apt []string `json:"apt,omitempty"`
 
-	// Commands configuration
-	Commands Commands `json:"commands,omitempty"`
+	// Commands configuration (contains all build logic)
+	Commands Commands `json:"commands"`
 
 	// Port configuration
 	Port int `json:"port"`
@@ -30,24 +30,12 @@ type ExecutionPlan struct {
 	Evidence Evidence `json:"evidence,omitempty"`
 }
 
-// BaseConfig represents the base environment configuration for a project.
-type BaseConfig struct {
-	// Base image name
-	Name string `json:"name"`
-	// Platform specification
-	Platform string `json:"platform,omitempty"`
-}
-
-// RuntimeConfig represents the runtime configuration
+// RuntimeConfig represents the simplified runtime configuration
 type RuntimeConfig struct {
-	// Language type
-	Language string `json:"language"`
-	// Language version
-	Version *string `json:"version,omitempty"`
-	// Required tools, e.g., corepack, pnpm, poetry, uv, caddy
-	Tools []string `json:"tools,omitempty"`
-	// Environment variables for runtime
-	Environment map[string]string `json:"environment,omitempty"`
+	// Base image name, e.g., "node:20-alpine"
+	Image string `json:"image"`
+	// Framework name, e.g., "nextjs"
+	Framework *string `json:"framework,omitempty"`
 }
 
 // Evidence represents detection evidence
@@ -175,11 +163,12 @@ type ConfidenceIndicator struct {
 	Satisfied bool `json:"satisfied"`
 }
 
-// Commands represents the command configuration
+// Commands represents the command configuration (contains all build logic)
 type Commands struct {
-	Dev   []string `json:"dev,omitempty"`
-	Build []string `json:"build,omitempty"`
-	Start []string `json:"start,omitempty"`
+	Setup []string `json:"setup,omitempty"` // Install dependencies (replaces build tools)
+	Dev   []string `json:"dev,omitempty"`   // Development environment
+	Build []string `json:"build,omitempty"` // Build production version
+	Run   []string `json:"run,omitempty"`   // Production environment (replaces start)
 }
 
 // ScanOptions represents scanning configuration

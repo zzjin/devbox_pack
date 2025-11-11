@@ -42,15 +42,15 @@ func TestGeneratePlan_NodeProject(t *testing.T) {
 		t.Fatal("GeneratePlan returned nil plan")
 	}
 
-	if plan.Runtime.Language != "node" {
-		t.Errorf("expected language 'node', got '%s'", plan.Runtime.Language)
+	if plan.Provider != "node" {
+		t.Errorf("expected provider 'node', got '%s'", plan.Provider)
 	}
 
 	if plan.Provider != "node" {
 		t.Errorf("expected provider 'node', got '%s'", plan.Provider)
 	}
 
-	if len(plan.Commands.Build) == 0 && len(plan.Commands.Dev) == 0 {
+	if len(plan.Commands.Setup) == 0 && len(plan.Commands.Dev) == 0 {
 		t.Error("plan has no build or dev commands")
 	}
 }
@@ -84,8 +84,8 @@ func TestGeneratePlan_PythonProject(t *testing.T) {
 		t.Fatal("GeneratePlan returned nil plan")
 	}
 
-	if plan.Runtime.Language != "python" {
-		t.Errorf("expected language 'python', got '%s'", plan.Runtime.Language)
+	if plan.Provider != "python" {
+		t.Errorf("expected provider 'python', got '%s'", plan.Provider)
 	}
 
 	if plan.Provider != "python" {
@@ -122,8 +122,8 @@ func TestGeneratePlan_StaticProject(t *testing.T) {
 		t.Fatal("GeneratePlan returned nil plan")
 	}
 
-	if plan.Runtime.Language != "staticfile" {
-		t.Errorf("expected language 'staticfile', got '%s'", plan.Runtime.Language)
+	if plan.Provider != "staticfile" {
+		t.Errorf("expected provider 'staticfile', got '%s'", plan.Provider)
 	}
 
 	if plan.Provider != "staticfile" {

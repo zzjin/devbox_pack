@@ -22,7 +22,7 @@ func NewDenoProvider() *DenoProvider {
 		BaseProvider: BaseProvider{
 			Name:     "deno",
 			Language: "deno",
-			Priority: 95,
+			Priority: 70,
 		},
 	}
 }
@@ -151,6 +151,14 @@ func (p *DenoProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 
 // detectDenoVersion detects Deno version
 func (p *DenoProvider) detectDenoVersion(projectPath string, gitHandler interface{}) (*types.VersionInfo, error) {
+	gh := gitHandler.(*git.GitHandler)
+
+	// Read from .dvmrc file first (highest priority)
+	dvmrcContent, err := gh.ReadFile(projectPath, ".dvmrc")
+	if err == nil && strings.TrimSpace(dvmrcContent) != "" {
+		return p.CreateVersionInfo(strings.TrimSpace(dvmrcContent), ".dvmrc"), nil
+	}
+
 	// Read from deno.json
 	denoJson, err := p.SafeReadJSON(projectPath, "deno.json", gitHandler)
 	if err != nil {
@@ -290,19 +298,58 @@ func (p *DenoProvider) GenerateCommands(result *types.DetectResult, options type
 		mainFile = "app.ts"
 	}
 
-	commands.Dev = []string{
-		"deno run --allow-all " + mainFile,
+	// Setup commands - check if we have package management files
+	if p.HasFileInEvidence(result.Evidence.Files, "deno.json") || p.HasFileInEvidence(result.Evidence.Files, "deno.jsonc") {
+		commands.Setup = []string{"deno install"}
+	} else {
+		commands.Setup = []string{"deno cache " + mainFile}
 	}
 
-	commands.Start = []string{
-		"deno run --allow-all " + mainFile,
+	// Development commands - check for framework-specific tasks
+	if result.Framework != "" {
+		// For framework projects, try to use deno task
+		commands.Dev = []string{"deno task dev"}
+	} else {
+		// Development commands with hot reload
+		commands.Dev = []string{"deno run --allow-all --watch " + mainFile}
 	}
+
+	// Build commands
+	commands.Build = []string{"deno compile --allow-all --output app " + mainFile}
+
+	// Run commands
+	commands.Run = []string{"deno run --allow-all " + mainFile}
 
 	return commands
 }
 
+// GenerateEnvironment generates environment variables for Deno project
+func (p *DenoProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Deno specific environment variables
+	env["DENO_ENV"] = "production"
+
+	// Set port for web applications
+	env["PORT"] = "8000"
+
+	// Add Deno version if available
+	if result.Version != "" {
+		env["DENO_VERSION"] = result.Version
+	}
+
+	return env
+}
+
 // NeedsNativeCompilation checks if Deno project needs native compilation
 func (p *DenoProvider) NeedsNativeCompilation(result *types.DetectResult) bool {
+	// Check metadata for native modules flag
+	if result.Metadata != nil {
+		if hasNativeModules, ok := result.Metadata["hasNativeModules"].(bool); ok {
+			return hasNativeModules
+		}
+	}
+
 	// Deno projects usually don't need native compilation, they are runtime interpreted
 	return false
 }

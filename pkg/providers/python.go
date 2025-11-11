@@ -5,6 +5,7 @@
 package providers
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -22,7 +23,7 @@ func NewPythonProvider() *PythonProvider {
 		BaseProvider: BaseProvider{
 			Name:     "python",
 			Language: "python",
-			Priority: 80,
+			Priority: 60,
 		},
 	}
 }
@@ -42,6 +43,7 @@ func (p *PythonProvider) Detect(projectPath string, files []types.FileInfo, gitH
 	indicators := []types.ConfidenceIndicator{
 		{Weight: 30, Satisfied: p.HasAnyFile(files, []string{"requirements.txt", "pyproject.toml", "setup.py", "Pipfile"})},
 		{Weight: 25, Satisfied: p.HasAnyFile(files, []string{"*.py"})},
+		{Weight: 20, Satisfied: p.HasFile(files, "pdm.lock")}, // PDM lock file gets high weight
 		{Weight: 15, Satisfied: p.HasFile(files, "poetry.lock")},
 		{Weight: 15, Satisfied: p.HasFile(files, "Pipfile.lock")},
 		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{".python-version", "runtime.txt"})},
@@ -68,13 +70,22 @@ func (p *PythonProvider) Detect(projectPath string, files []types.FileInfo, gitH
 		return nil, err
 	}
 
-	// Detect package manager
-	packageManager := p.DetectPackageManager(files, map[string]string{
-		"poetry.lock":      "poetry",
-		"Pipfile.lock":     "pipenv",
-		"requirements.txt": "pip",
-		"pyproject.toml":   "pip",
-	})
+	// Detect package manager - check for lock files first to get correct package manager
+	lockFileMap := map[string]string{
+		"pdm.lock":         "pdm",      // PDM lock file
+		"poetry.lock":      "poetry",    // Poetry lock file
+		"Pipfile.lock":     "pipenv",    // Pipenv lock file
+	}
+	packageManager := p.DetectPackageManager(files, lockFileMap)
+
+	// If no lock file found, check for other indicators
+	if packageManager == "" {
+		otherFileMap := map[string]string{
+			"requirements.txt": "pip",       // pip requirements file
+			"pyproject.toml":   "pip",       // Default to pip for pyproject.toml
+		}
+		packageManager = p.DetectPackageManager(files, otherFileMap)
+	}
 	if packageManager == "" {
 		packageManager = "pip"
 	}
@@ -85,6 +96,7 @@ func (p *PythonProvider) Detect(projectPath string, files []types.FileInfo, gitH
 		"hasSetupPy":       p.HasFile(files, "setup.py"),
 		"hasPipfile":       p.HasFile(files, "Pipfile"),
 		"hasPoetryLock":    p.HasFile(files, "poetry.lock"),
+		"hasPDMLock":       p.HasFile(files, "pdm.lock"),
 		"packageManager":   packageManager,
 		"framework":        framework,
 	}
@@ -112,11 +124,24 @@ func (p *PythonProvider) Detect(projectPath string, files []types.FileInfo, gitH
 	if p.HasFile(files, "poetry.lock") {
 		evidenceFiles = append(evidenceFiles, "poetry.lock")
 	}
+	if p.HasFile(files, "pdm.lock") {
+		evidenceFiles = append(evidenceFiles, "pdm.lock")
+	}
 	if p.HasFile(files, ".python-version") {
 		evidenceFiles = append(evidenceFiles, ".python-version")
 	}
 	if p.HasFile(files, "runtime.txt") {
 		evidenceFiles = append(evidenceFiles, "runtime.txt")
+	}
+	// Add entry point files to evidence
+	if p.HasFile(files, "main.py") {
+		evidenceFiles = append(evidenceFiles, "main.py")
+	}
+	if p.HasFile(files, "app.py") {
+		evidenceFiles = append(evidenceFiles, "app.py")
+	}
+	if p.HasFile(files, "manage.py") {
+		evidenceFiles = append(evidenceFiles, "manage.py")
 	}
 
 	evidence.Files = evidenceFiles
@@ -169,56 +194,100 @@ func (p *PythonProvider) GenerateCommands(result *types.DetectResult, options ty
 
 	// Check different Python project types
 	hasRequirements := p.HasFileInEvidence(result.Evidence.Files, "requirements.txt")
-	hasPipfile := p.HasFileInEvidence(result.Evidence.Files, "Pipfile")
 	hasPyproject := p.HasFileInEvidence(result.Evidence.Files, "pyproject.toml")
 	hasApp := p.HasFileInEvidence(result.Evidence.Files, "app.py")
 	hasMain := p.HasFileInEvidence(result.Evidence.Files, "main.py")
 	hasManage := p.HasFileInEvidence(result.Evidence.Files, "manage.py")
 
-	if hasRequirements {
-		// Standard Python project
-		commands.Dev = []string{
-			"pip install -r requirements.txt",
-		}
-		commands.Build = []string{
-			"pip install -r requirements.txt",
-		}
-	} else if hasPipfile {
-		// Pipenv project
-		commands.Dev = []string{
-			"pipenv install --dev",
-		}
-		commands.Build = []string{
-			"pipenv install",
-		}
-	} else if hasPyproject {
-		// Poetry or modern Python project
-		commands.Dev = []string{
-			"pip install -e .",
-		}
-		commands.Build = []string{
-			"pip install .",
+	// Get package manager from metadata
+	packageManager := "pip"
+	if result.Metadata != nil {
+		if pm, ok := result.Metadata["packageManager"].(string); ok {
+			packageManager = pm
 		}
 	}
 
-	// Determine start command
+	// Setup commands - install dependencies
+	switch packageManager {
+	case "pdm":
+		commands.Setup = []string{"pdm install"}
+	case "poetry":
+		commands.Setup = []string{"poetry install"}
+	case "pipenv":
+		commands.Setup = []string{"pipenv install"}
+	case "pip":
+		if hasRequirements {
+			commands.Setup = []string{"pip install -r requirements.txt"}
+		} else if hasPyproject {
+			commands.Setup = []string{"pip install ."}
+		}
+	}
+
+	// Development and Run commands
 	if hasApp {
-		commands.Dev = append(commands.Dev, "python app.py")
-		commands.Start = []string{"python app.py"}
+		if packageManager == "pdm" {
+			commands.Dev = []string{"pdm run python app.py"}
+			commands.Run = []string{"pdm run python app.py"}
+		} else {
+			commands.Dev = []string{"python app.py"}
+			commands.Run = []string{"python app.py"}
+		}
 	} else if hasMain {
-		commands.Dev = append(commands.Dev, "python main.py")
-		commands.Start = []string{"python main.py"}
+		if packageManager == "pdm" {
+			commands.Dev = []string{"pdm run python main.py"}
+			commands.Run = []string{"pdm run python main.py"}
+		} else {
+			commands.Dev = []string{"python main.py"}
+			commands.Run = []string{"python main.py"}
+		}
 	} else if hasManage {
 		// Django project
-		commands.Dev = append(commands.Dev, "python manage.py runserver 0.0.0.0:8000")
-		commands.Start = []string{"python manage.py runserver 0.0.0.0:8000"}
+		if packageManager == "pdm" {
+			commands.Dev = []string{"pdm run python manage.py runserver 0.0.0.0:8000"}
+			commands.Run = []string{"pdm run python manage.py runserver 0.0.0.0:8000"}
+		} else {
+			commands.Dev = []string{"python manage.py runserver 0.0.0.0:8000"}
+			commands.Run = []string{"python manage.py runserver 0.0.0.0:8000"}
+		}
 	} else {
 		// Generic Python startup
-		commands.Dev = append(commands.Dev, "python -m http.server 8000")
-		commands.Start = []string{"python -m http.server 8000"}
+		if packageManager == "pdm" {
+			commands.Dev = []string{"pdm run python -m http.server 8000"}
+			commands.Run = []string{"pdm run python -m http.server 8000"}
+		} else {
+			commands.Dev = []string{"python -m http.server 8000"}
+			commands.Run = []string{"python -m http.server 8000"}
+		}
 	}
 
 	return commands
+}
+
+// GenerateEnvironment generates environment variables for Python project
+func (p *PythonProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Python specific environment variables
+	env["PYTHONUNBUFFERED"] = "1"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+	// Add package manager specific environment variables
+	if result.Metadata != nil {
+		if packageManager, ok := result.Metadata["packageManager"].(string); ok && packageManager == "pdm" {
+			env["PDM_IGNORE_SAVED_PYTHON"] = "1" // Force PDM to use system Python
+			env["PDM_NO_SELF"] = "1"             // Skip PDM self-upgrade
+		}
+	}
+
+	// Set port for web applications
+	env["PORT"] = "8000"
+
+	// Add Python version if available
+	if result.Version != "" {
+		env["PYTHON_VERSION"] = result.Version
+	}
+
+	return env
 }
 
 // NeedsNativeCompilation checks if Python project needs native compilation
@@ -251,7 +320,7 @@ func (p *PythonProvider) detectPythonVersion(projectPath string, gitHandler inte
 		regexp.MustCompile(`^(.+?)(?:\s|$)`),
 	)
 	if err == nil && version != "" {
-		return p.CreateVersionInfo(p.NormalizeVersion(version), ".python-version"), nil
+		return p.CreateVersionInfo(p.normalizePythonVersion(version), ".python-version"), nil
 	}
 
 	// Read from runtime.txt (Heroku)
@@ -262,7 +331,7 @@ func (p *PythonProvider) detectPythonVersion(projectPath string, gitHandler inte
 		regexp.MustCompile(`python-(.+)$`),
 	)
 	if err == nil && version != "" {
-		return p.CreateVersionInfo(p.NormalizeVersion(version), "runtime.txt"), nil
+		return p.CreateVersionInfo(p.normalizePythonVersion(version), "runtime.txt"), nil
 	}
 
 	// Read from pyproject.toml
@@ -271,7 +340,7 @@ func (p *PythonProvider) detectPythonVersion(projectPath string, gitHandler inte
 		re := regexp.MustCompile(`python\s*=\s*["']([^"']+)["']`)
 		matches := re.FindStringSubmatch(pyprojectContent)
 		if len(matches) > 1 {
-			return p.CreateVersionInfo(p.NormalizeVersion(matches[1]), "pyproject.toml"), nil
+			return p.CreateVersionInfo(p.normalizePythonVersion(matches[1]), "pyproject.toml"), nil
 		}
 	}
 
@@ -281,7 +350,7 @@ func (p *PythonProvider) detectPythonVersion(projectPath string, gitHandler inte
 		re := regexp.MustCompile(`python_version\s*=\s*["']([^"']+)["']`)
 		matches := re.FindStringSubmatch(pipfileContent)
 		if len(matches) > 1 {
-			return p.CreateVersionInfo(p.NormalizeVersion(matches[1]), "Pipfile"), nil
+			return p.CreateVersionInfo(p.normalizePythonVersion(matches[1]), "Pipfile"), nil
 		}
 	}
 
@@ -340,4 +409,27 @@ func (p *PythonProvider) detectFramework(projectPath string, gitHandler interfac
 	}
 
 	return "", nil
+}
+
+// normalizePythonVersion normalizes Python version for base catalog lookup
+func (p *PythonProvider) normalizePythonVersion(version string) string {
+	// Remove prefix characters (like v, ^, ~, >=, etc.)
+	re := regexp.MustCompile(`^[v^~>=<]+`)
+	cleaned := re.ReplaceAllString(version, "")
+
+	// Extract major.minor version for base catalog lookup
+	versionRe := regexp.MustCompile(`^(\d+)(?:\.(\d+))?`)
+	matches := versionRe.FindStringSubmatch(cleaned)
+	if len(matches) > 1 {
+		major := matches[1]
+		minor := "0"
+
+		if len(matches) > 2 && matches[2] != "" {
+			minor = matches[2]
+		}
+
+		return fmt.Sprintf("%s.%s", major, minor)
+	}
+
+	return cleaned
 }

@@ -6,6 +6,7 @@ package providers
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/labring/devbox-pack/pkg/types"
 )
@@ -21,7 +22,7 @@ func NewRubyProvider() *RubyProvider {
 		BaseProvider: BaseProvider{
 			Name:     "ruby",
 			Language: "ruby",
-			Priority: 65,
+			Priority: 50,
 		},
 	}
 }
@@ -38,18 +39,32 @@ func (p *RubyProvider) GetPriority() int {
 
 // Detect detects Ruby project
 func (p *RubyProvider) Detect(projectPath string, files []types.FileInfo, gitHandler interface{}) (*types.DetectResult, error) {
+	// Check for Rails-specific files first
+	isRailsProject := p.HasAnyFile(files, []string{
+		"config/application.rb",
+		"config/routes.rb",
+		"app/models/",
+		"app/controllers/",
+		"app/views/",
+		"bin/rails",
+		"config/environments/development.rb",
+	})
+
+	// Adjust indicators for Rails detection
 	indicators := []types.ConfidenceIndicator{
 		{Weight: 30, Satisfied: p.HasFile(files, "Gemfile")},
 		{Weight: 20, Satisfied: p.HasFile(files, "Gemfile.lock")},
-		{Weight: 20, Satisfied: p.HasAnyFile(files, []string{"*.rb"})},
+		{Weight: 25, Satisfied: p.HasAnyFile(files, []string{"*.rb"})}, // Higher weight for .rb files
+		{Weight: 15, Satisfied: isRailsProject}, // Higher weight for Rails-specific files
 		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{".ruby-version", ".rvmrc"})},
 		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{"config.ru", "Rakefile"})},
+		{Weight: 10, Satisfied: p.HasFile(files, "config/database.yml")},
 		{Weight: 5, Satisfied: p.HasAnyFile(files, []string{"app/", "lib/"})},
 		{Weight: 5, Satisfied: p.HasAnyFile(files, []string{"spec/", "test/"})},
 	}
 
 	confidence := p.CalculateConfidence(indicators)
-	detected := confidence > 0.3
+	detected := confidence > 0.2 // Lower threshold for projects with only .rb files
 
 	if !detected {
 		return p.CreateDetectResult(false, confidence, "", nil, "", "", "", nil, types.Evidence{}), nil
@@ -67,13 +82,28 @@ func (p *RubyProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 		return nil, err
 	}
 
+	// Detect Rails-specific features
+	var railsFeatures []string
+	if framework == "Rails" {
+		railsFeatures = p.detectRailsFeatures(projectPath, files, gitHandler)
+	}
+
+	// Detect asset pipeline
+	assetPipeline := p.detectAssetPipeline(projectPath, gitHandler)
+
 	metadata := map[string]interface{}{
-		"hasGemfile":     p.HasFile(files, "Gemfile"),
-		"hasGemfileLock": p.HasFile(files, "Gemfile.lock"),
-		"hasRakefile":    p.HasFile(files, "Rakefile"),
-		"hasConfigRu":    p.HasFile(files, "config.ru"),
-		"hasRubyVersion": p.HasFile(files, ".ruby-version"),
-		"framework":      framework,
+		"hasGemfile":       p.HasFile(files, "Gemfile"),
+		"hasGemfileLock":   p.HasFile(files, "Gemfile.lock"),
+		"hasRakefile":      p.HasFile(files, "Rakefile"),
+		"hasConfigRu":      p.HasFile(files, "config.ru"),
+		"hasRubyVersion":   p.HasFile(files, ".ruby-version"),
+		"hasDatabaseYml":   p.HasFile(files, "config/database.yml"),
+		"hasRoutesRb":      p.HasFile(files, "config/routes.rb"),
+		"hasApplicationRb": p.HasFile(files, "config/application.rb"),
+		"isRailsProject":   isRailsProject,
+		"framework":        framework,
+		"railsFeatures":    railsFeatures,
+		"assetPipeline":    assetPipeline,
 	}
 
 	// Build Evidence
@@ -103,6 +133,22 @@ func (p *RubyProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 		evidenceFiles = append(evidenceFiles, ".rbenv-version")
 	}
 
+	// Add Rails-specific files
+	if isRailsProject {
+		if p.HasFile(files, "config/application.rb") {
+			evidenceFiles = append(evidenceFiles, "config/application.rb")
+		}
+		if p.HasFile(files, "config/routes.rb") {
+			evidenceFiles = append(evidenceFiles, "config/routes.rb")
+		}
+		if p.HasFile(files, "config/database.yml") {
+			evidenceFiles = append(evidenceFiles, "config/database.yml")
+		}
+		if p.HasFile(files, "bin/rails") {
+			evidenceFiles = append(evidenceFiles, "bin/rails")
+		}
+	}
+
 	evidence.Files = evidenceFiles
 
 	// Build detection reason
@@ -114,14 +160,20 @@ func (p *RubyProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 	if p.HasFile(files, "Gemfile") {
 		reasons = append(reasons, "Gemfile")
 	}
+	if framework == "Rails" {
+		reasons = append(reasons, "Ruby on Rails framework")
+		if len(railsFeatures) > 0 {
+			reasons = append(reasons, "features: "+strings.Join(railsFeatures, ", "))
+		}
+		if assetPipeline != "" {
+			reasons = append(reasons, "asset pipeline: "+assetPipeline)
+		}
+	}
 	if p.HasFile(files, "Rakefile") {
 		reasons = append(reasons, "Rakefile")
 	}
 	if p.HasFile(files, "config.ru") {
 		reasons = append(reasons, "Rack configuration (config.ru)")
-	}
-	if framework != "" {
-		reasons = append(reasons, "framework: "+framework)
 	}
 	if len(reasons) > 0 {
 		reason += reasons[0]
@@ -162,7 +214,7 @@ func (p *RubyProvider) detectRubyVersion(projectPath string, gitHandler interfac
 		projectPath,
 		".rvmrc",
 		gitHandler,
-		regexp.MustCompile(`ruby-(.+)`),
+		regexp.MustCompile(`rvm use ([\d\.]+)`),
 	)
 	if err == nil && version != "" {
 		return p.CreateVersionInfo(p.NormalizeVersion(version), ".rvmrc"), nil
@@ -182,10 +234,90 @@ func (p *RubyProvider) detectRubyVersion(projectPath string, gitHandler interfac
 	return p.CreateVersionInfo("3.2", "default"), nil
 }
 
+// detectRailsFeatures detects Rails-specific features
+func (p *RubyProvider) detectRailsFeatures(projectPath string, files []types.FileInfo, gitHandler interface{}) []string {
+	var features []string
+
+	// Check for ActiveRecord
+	if p.HasFile(files, "app/models/") || p.HasFile(files, "config/database.yml") {
+		features = append(features, "ActiveRecord")
+	}
+
+	// Check for ActionCable
+	if p.HasFile(files, "app/channels/") {
+		features = append(features, "ActionCable")
+	}
+
+	// Check for ActionMailbox
+	if p.HasFile(files, "app/mailboxes/") {
+		features = append(features, "ActionMailbox")
+	}
+
+	// Check for ActionText
+	if p.HasFile(files, "app/views/action_text/") {
+		features = append(features, "ActionText")
+	}
+
+	// Check for ActiveStorage
+	if p.HasFile(files, "app/models/active_storage/") || p.HasFile(files, "storage/") {
+		features = append(features, "ActiveStorage")
+	}
+
+	// Check for ActiveJob
+	if p.HasFile(files, "app/jobs/") {
+		features = append(features, "ActiveJob")
+	}
+
+	// Check for API mode
+	if p.HasFile(files, "config/routes/api.rb") {
+		features = append(features, "API")
+	}
+
+	return features
+}
+
+// detectAssetPipeline detects which asset pipeline is used
+func (p *RubyProvider) detectAssetPipeline(projectPath string, gitHandler interface{}) string {
+	// Check for Sprockets
+	gemfileContent, err := p.SafeReadText(projectPath, "Gemfile", gitHandler)
+	if err == nil && gemfileContent != "" {
+		if regexp.MustCompile(`(?i)gem\s+['"]sprockets['"]`).MatchString(gemfileContent) {
+			return "Sprockets"
+		}
+	}
+
+	// Check for Propshaft
+	if err == nil && gemfileContent != "" {
+		if regexp.MustCompile(`(?i)gem\s+['"]propshaft['"]`).MatchString(gemfileContent) {
+			return "Propshaft"
+		}
+	}
+
+	// Check for jsbundling-rails (modern approach)
+	if err == nil && gemfileContent != "" {
+		if regexp.MustCompile(`(?i)gem\s+['"]jsbundling-rails['"]`).MatchString(gemfileContent) {
+			return "JS Bundling"
+		}
+	}
+
+	// Check for cssbundling-rails (modern approach)
+	if err == nil && gemfileContent != "" {
+		if regexp.MustCompile(`(?i)gem\s+['"]cssbundling-rails['"]`).MatchString(gemfileContent) {
+			return "CSS Bundling"
+		}
+	}
+
+	return ""
+}
+
 // detectFramework detects framework
 func (p *RubyProvider) detectFramework(projectPath string, gitHandler interface{}) (string, error) {
 	gemfileContent, err := p.SafeReadText(projectPath, "Gemfile", gitHandler)
 	if err != nil {
+		// If file doesn't exist, return empty string instead of error
+		if strings.Contains(err.Error(), "FILE_READ_ERROR") {
+			return "", nil
+		}
 		return "", err
 	}
 	if gemfileContent == "" {
@@ -193,7 +325,7 @@ func (p *RubyProvider) detectFramework(projectPath string, gitHandler interface{
 	}
 
 	frameworkMap := map[string]string{
-		"rails":     "Ruby on Rails",
+		"rails":     "Rails",
 		"sinatra":   "Sinatra",
 		"grape":     "Grape",
 		"hanami":    "Hanami",
@@ -223,34 +355,106 @@ func (p *RubyProvider) GenerateCommands(result *types.DetectResult, options type
 	hasGemfile := p.HasFileInEvidence(result.Evidence.Files, "Gemfile")
 	hasConfigRu := p.HasFileInEvidence(result.Evidence.Files, "config.ru")
 	hasAppRb := p.HasFileInEvidence(result.Evidence.Files, "app.rb")
+	hasRailsApp := p.HasFileInEvidence(result.Evidence.Files, "config/application.rb")
 
+	// Setup commands - install dependencies
 	if hasGemfile {
-		commands.Dev = []string{
-			"bundle install",
-		}
-		commands.Build = []string{
-			"bundle install --without development test",
-		}
+		commands.Setup = []string{"bundle install"}
 	}
 
-	// Determine start command
-	if hasConfigRu {
+	// Development and Run commands
+	if result.Framework == "Rails" || hasRailsApp {
+		// Rails-specific commands
+		commands.Setup = append(commands.Setup, "rails db:prepare")
+		commands.Dev = []string{"bundle exec rails server -b 0.0.0.0 -p 3000"}
+		commands.Run = []string{"bundle exec rails server -b 0.0.0.0 -e production -p 3000"}
+		commands.Build = []string{"bundle exec rails assets:precompile"}
+	} else if hasConfigRu {
 		// Rack application
-		commands.Dev = append(commands.Dev, "bundle exec rackup -o 0.0.0.0 -p 4567")
-		commands.Start = []string{"bundle exec rackup -o 0.0.0.0 -p 4567"}
+		commands.Dev = []string{"bundle exec rackup -o 0.0.0.0 -p 4567"}
+		commands.Run = []string{"bundle exec rackup -o 0.0.0.0 -p 4567"}
 	} else if hasAppRb {
-		commands.Dev = append(commands.Dev, "ruby app.rb")
-		commands.Start = []string{"ruby app.rb"}
+		commands.Dev = []string{"ruby app.rb"}
+		commands.Run = []string{"ruby app.rb"}
 	} else {
-		commands.Dev = append(commands.Dev, "ruby -run -e httpd . -p 4567")
-		commands.Start = []string{"ruby -run -e httpd . -p 4567"}
+		commands.Dev = []string{"ruby -run -e httpd . -p 4567"}
+		commands.Run = []string{"ruby -run -e httpd . -p 4567"}
 	}
 
 	return commands
 }
 
+// GenerateEnvironment generates environment variables for Ruby project
+func (p *RubyProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Ruby specific environment variables
+	env["RACK_ENV"] = "production"
+	env["RAILS_ENV"] = "production"
+
+	// Rails-specific environment variables
+	if result.Framework == "Rails" {
+		// Set default Rails port
+		env["PORT"] = "3000"
+
+		// Add Rails-specific environment variables
+		env["RAILS_MASTER_KEY"] = ""
+		env["RAILS_LOG_TO_STDOUT"] = "true"
+		env["RAILS_SERVE_STATIC_FILES"] = "true"
+		env["BUNDLE_WITHOUT"] = "development:test"
+
+		// Add asset pipeline environment variables
+		if result.Metadata != nil {
+			if assetPipeline, ok := result.Metadata["assetPipeline"].(string); ok {
+				switch assetPipeline {
+				case "Sprockets":
+					env["RAILS_ENV"] = "production"
+					env["RAILS_GROUPS"] = "assets"
+				case "Propshaft":
+					env["RAILS_ENV"] = "production"
+				case "JS Bundling":
+					env["RAILS_ENV"] = "production"
+				case "CSS Bundling":
+					env["RAILS_ENV"] = "production"
+				}
+			}
+
+			// Add Rails features information
+			if railsFeatures, ok := result.Metadata["railsFeatures"].([]string); ok {
+				for _, feature := range railsFeatures {
+					switch feature {
+					case "ActiveRecord":
+						env["DATABASE_URL"] = "sqlite3:///db/production.sqlite3"
+					case "ActionCable":
+						env["ACTION_CABLE_MOUNT_PATH"] = "/cable"
+					case "API":
+						env["RAILS_API_ONLY"] = "true"
+					}
+				}
+			}
+		}
+	} else {
+		// Set port for non-Rails Ruby applications
+		env["PORT"] = "4567"
+	}
+
+	// Add Ruby version if available
+	if result.Version != "" {
+		env["RUBY_VERSION"] = result.Version
+	}
+
+	return env
+}
+
 // NeedsNativeCompilation checks if Ruby project needs native compilation
 func (p *RubyProvider) NeedsNativeCompilation(result *types.DetectResult) bool {
+	// Check metadata for native gems flag
+	if result.Metadata != nil {
+		if hasNativeGems, ok := result.Metadata["hasNativeGems"].(bool); ok {
+			return hasNativeGems
+		}
+	}
+
 	// Ruby projects usually don't need native compilation, unless they have gems with C extensions
 	// Most Ruby projects are interpreted
 	return false

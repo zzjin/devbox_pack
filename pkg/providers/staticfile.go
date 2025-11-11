@@ -1,7 +1,3 @@
-/**
- * DevBox Pack Execution Plan Generator - StaticFile Provider
- */
-
 package providers
 
 import (
@@ -19,7 +15,7 @@ func NewStaticFileProvider() *StaticFileProvider {
 		BaseProvider: BaseProvider{
 			Name:     "staticfile",
 			Language: "staticfile",
-			Priority: 10,
+			Priority: 90,
 		},
 	}
 }
@@ -183,11 +179,22 @@ func (p *StaticFileProvider) Detect(projectPath string, files []types.FileInfo, 
 func (p *StaticFileProvider) GenerateCommands(result *types.DetectResult, options types.CLIOptions) types.Commands {
 	commands := types.Commands{}
 
-	commands.Start = []string{
-		"nginx -g 'daemon off;'",
-	}
+	// Static files don't need setup or build commands typically
+	commands.Dev = []string{"python -m http.server 8000"}
+	commands.Run = []string{"nginx -g 'daemon off;'"}
 
 	return commands
+}
+
+// GenerateEnvironment generates environment variables for static file project
+func (p *StaticFileProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set static file specific environment variables
+	env["NGINX_PORT"] = "80"
+	env["DOCUMENT_ROOT"] = "/usr/share/nginx/html"
+
+	return env
 }
 
 // NeedsNativeCompilation checks if static file project needs native compilation

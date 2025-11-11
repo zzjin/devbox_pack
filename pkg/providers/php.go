@@ -5,6 +5,7 @@
 package providers
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -22,7 +23,7 @@ func NewPHPProvider() *PHPProvider {
 		BaseProvider: BaseProvider{
 			Name:     "php",
 			Language: "php",
-			Priority: 60,
+			Priority: 10,
 		},
 	}
 }
@@ -43,10 +44,12 @@ func (p *PHPProvider) Detect(projectPath string, files []types.FileInfo, gitHand
 		{Weight: 30, Satisfied: p.HasFile(files, "composer.json")},
 		{Weight: 25, Satisfied: p.HasAnyFile(files, []string{"*.php"})},
 		{Weight: 15, Satisfied: p.HasFile(files, "composer.lock")},
-		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{"index.php", "app.php"})},
+		{Weight: 20, Satisfied: p.HasAnyFile(files, []string{"index.php", "app.php"})},
 		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{"vendor/", "autoload.php"})},
-		{Weight: 5, Satisfied: p.HasAnyFile(files, []string{".php-version", "phpunit.xml"})},
-		{Weight: 5, Satisfied: p.HasAnyFile(files, []string{"artisan", "wp-config.php"})},
+		{Weight: 10, Satisfied: p.HasAnyFile(files, []string{".php-version", "phpunit.xml"})},
+		{Weight: 50, Satisfied: p.HasFile(files, "artisan")},                                          // High weight for Laravel artisan
+		{Weight: 15, Satisfied: p.HasAnyFile(files, []string{"app/", "config/", "resources/views/"})}, // Laravel directory structure
+		{Weight: 10, Satisfied: p.HasFile(files, "wp-config.php")},                                    // WordPress detection
 	}
 
 	confidence := p.CalculateConfidence(indicators)
@@ -157,7 +160,7 @@ func (p *PHPProvider) detectPHPVersion(projectPath string, gitHandler interface{
 	if composerJson != nil {
 		if require, ok := composerJson["require"].(map[string]interface{}); ok {
 			if phpVersion, ok := require["php"].(string); ok {
-				return p.CreateVersionInfo(p.NormalizeVersion(phpVersion), "composer.json require"), nil
+				return p.CreateVersionInfo(p.normalizePHPVersion(phpVersion), "composer.json require"), nil
 			}
 		}
 	}
@@ -200,6 +203,13 @@ func (p *PHPProvider) detectFramework(projectPath string, gitHandler interface{}
 
 	frameworkMap := map[string]string{
 		"laravel/framework":           "Laravel",
+		"laravel/ui":                  "Laravel",
+		"laravel/sanctum":             "Laravel",
+		"laravel/passport":            "Laravel",
+		"laravel/horizon":             "Laravel",
+		"laravel/telescope":           "Laravel",
+		"laravel/vapor":               "Laravel",
+		"inertiajs/inertia-laravel":   "Laravel", // Laravel + Inertia.js
 		"symfony/symfony":             "Symfony",
 		"symfony/framework-bundle":    "Symfony",
 		"codeigniter4/framework":      "CodeIgniter",
@@ -213,7 +223,58 @@ func (p *PHPProvider) detectFramework(projectPath string, gitHandler interface{}
 		"twig/twig":                   "Twig",
 	}
 
-	return p.DetectFrameworkFromDependencies(composerJson, frameworkMap), nil
+	return p.detectFrameworkFromComposerDependencies(composerJson, frameworkMap), nil
+}
+
+// detectFrameworkFromComposerDependencies detects framework from Composer dependencies
+func (p *PHPProvider) detectFrameworkFromComposerDependencies(
+	composerJson map[string]interface{},
+	frameworkMap map[string]string,
+) string {
+	allDeps := make(map[string]interface{})
+
+	// Merge require and require-dev dependencies (Composer format)
+	if require, ok := composerJson["require"].(map[string]interface{}); ok {
+		for k, v := range require {
+			allDeps[k] = v
+		}
+	}
+	if requireDev, ok := composerJson["require-dev"].(map[string]interface{}); ok {
+		for k, v := range requireDev {
+			allDeps[k] = v
+		}
+	}
+
+	for depName, framework := range frameworkMap {
+		if _, exists := allDeps[depName]; exists {
+			return framework
+		}
+	}
+
+	return ""
+}
+
+// normalizePHPVersion normalizes PHP version for base catalog lookup
+func (p *PHPProvider) normalizePHPVersion(version string) string {
+	// Remove prefix characters (like v, ^, ~, >=, etc.)
+	re := regexp.MustCompile(`^[v^~>=<]+`)
+	cleaned := re.ReplaceAllString(version, "")
+
+	// Extract major.minor version for base catalog lookup
+	versionRe := regexp.MustCompile(`^(\d+)(?:\.(\d+))?`)
+	matches := versionRe.FindStringSubmatch(cleaned)
+	if len(matches) > 1 {
+		major := matches[1]
+		minor := "0"
+
+		if len(matches) > 2 && matches[2] != "" {
+			minor = matches[2]
+		}
+
+		return fmt.Sprintf("%s.%s", major, minor)
+	}
+
+	return cleaned
 }
 
 // GenerateCommands generates commands for PHP project
@@ -222,29 +283,62 @@ func (p *PHPProvider) GenerateCommands(result *types.DetectResult, options types
 
 	// Check if composer.json exists
 	hasComposer := p.HasFileInEvidence(result.Evidence.Files, "composer.json")
+	hasIndex := p.HasFileInEvidence(result.Evidence.Files, "index.php")
+	isLaravel := result.Framework == "Laravel"
 
+	// Setup commands - install dependencies
 	if hasComposer {
-		commands.Dev = []string{
-			"composer install",
+		commands.Setup = []string{"composer install"}
+		if isLaravel {
+			commands.Setup = append(commands.Setup, "php artisan key:generate", "php artisan config:cache")
 		}
-		commands.Build = []string{
-			"composer install --no-dev --optimize-autoloader",
+		commands.Build = []string{"composer install --no-dev --optimize-autoloader"}
+		if isLaravel {
+			commands.Build = append(commands.Build, "php artisan config:cache", "php artisan route:cache", "php artisan view:cache")
 		}
 	}
 
-	// Check if index.php exists
-	hasIndex := p.HasFileInEvidence(result.Evidence.Files, "index.php")
-
-	// Determine start command
-	if hasIndex {
-		commands.Dev = append(commands.Dev, "php -S 0.0.0.0:8000 index.php")
-		commands.Start = []string{"php -S 0.0.0.0:8000 index.php"}
+	// Development and Run commands
+	if isLaravel {
+		// Laravel-specific commands
+		commands.Dev = []string{"php artisan serve"}
+		commands.Run = []string{"php artisan serve"}
+	} else if hasIndex {
+		commands.Dev = []string{"php -S 0.0.0.0:8000 index.php"}
+		commands.Run = []string{"php -S 0.0.0.0:8000 index.php"}
 	} else {
-		commands.Dev = append(commands.Dev, "php -S 0.0.0.0:8000")
-		commands.Start = []string{"php -S 0.0.0.0:8000"}
+		commands.Dev = []string{"php -S 0.0.0.0:8000"}
+		commands.Run = []string{"php -S 0.0.0.0:8000"}
 	}
 
 	return commands
+}
+
+// GenerateEnvironment generates environment variables for PHP project
+func (p *PHPProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set PHP specific environment variables
+	env["PHP_ENV"] = "production"
+
+	// Laravel-specific environment variables
+	if result.Framework == "Laravel" {
+		env["APP_ENV"] = "local"
+		env["APP_DEBUG"] = "true"
+		env["APP_KEY"] = "" // Will be generated by artisan key:generate
+		env["LARAVEL_ENV"] = "local"
+		env["PORT"] = "8000" // Laravel artisan serve default
+	} else {
+		// Set port for generic PHP web applications
+		env["PORT"] = "8000"
+	}
+
+	// Add PHP version if available
+	if result.Version != "" {
+		env["PHP_VERSION"] = result.Version
+	}
+
+	return env
 }
 
 // NeedsNativeCompilation checks if PHP project needs native compilation

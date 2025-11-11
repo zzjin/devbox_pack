@@ -696,7 +696,7 @@ jobs:
       - name: Deploy with Plan
         run: |
           # Use generated plan for deployment
-          cat plan.json | jq '.commands.build[]' | xargs -I {} sh -c '{}'
+          cat plan.json | jq '.commands.setup[]' | xargs -I {} sh -c '{}'
 ```
 
 ### 2. Docker Integration

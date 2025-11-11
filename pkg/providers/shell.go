@@ -19,7 +19,7 @@ func NewShellProvider() *ShellProvider {
 		BaseProvider: BaseProvider{
 			Name:     "shell",
 			Language: "shell",
-			Priority: 30,
+			Priority: 100,
 		},
 	}
 }
@@ -206,21 +206,27 @@ func (p *ShellProvider) getShellFilesWithShebang(files []types.FileInfo, shellTy
 func (p *ShellProvider) GenerateCommands(result *types.DetectResult, options types.CLIOptions) types.Commands {
 	commands := types.Commands{}
 
-	// Shell projects usually don't have standard dev/build/start commands
-	// Provide some generic commands here
-	commands.Dev = []string{
-		"echo 'Shell project detected'",
-	}
+	// Setup commands - make scripts executable
+	commands.Setup = []string{"chmod +x *.sh"}
 
-	commands.Build = []string{
-		"echo 'No build step required for shell scripts'",
-	}
-
-	commands.Start = []string{
-		"echo 'Please specify which script to run'",
-	}
+	// Development and Run commands
+	commands.Dev = []string{"./start.sh"}
+	commands.Run = []string{"./start.sh"}
 
 	return commands
+}
+
+// GenerateEnvironment generates environment variables for Shell project
+func (p *ShellProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Shell specific environment variables
+	env["SHELL_ENV"] = "production"
+
+	// Set common environment variables
+	env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+
+	return env
 }
 
 // NeedsNativeCompilation checks if Shell project needs native compilation

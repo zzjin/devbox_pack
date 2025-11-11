@@ -22,7 +22,7 @@ func NewJavaProvider() *JavaProvider {
 		BaseProvider: BaseProvider{
 			Name:     "java",
 			Language: "java",
-			Priority: 70,
+			Priority: 30,
 		},
 	}
 }
@@ -68,15 +68,18 @@ func (p *JavaProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 		return nil, err
 	}
 
-	// Detect package manager
-	packageManager := p.DetectPackageManager(files, map[string]string{
-		"pom.xml":          "maven",
-		"build.gradle":     "gradle",
-		"build.gradle.kts": "gradle",
+	// Detect build tool
+	buildTool := p.DetectPackageManager(files, map[string]string{
+		"pom.xml":          "Maven",
+		"build.gradle":     "Gradle",
+		"build.gradle.kts": "Gradle",
 	})
-	if packageManager == "" {
-		packageManager = "maven"
+	if buildTool == "" {
+		buildTool = "Maven"
 	}
+
+	// For package manager, use lowercase
+	packageManager := strings.ToLower(buildTool)
 
 	metadata := map[string]interface{}{
 		"hasPom":           p.HasFile(files, "pom.xml"),
@@ -152,7 +155,7 @@ func (p *JavaProvider) Detect(projectPath string, files []types.FileInfo, gitHan
 		version,
 		framework,
 		packageManager,
-		packageManager,
+		buildTool,
 		metadata,
 		evidence,
 	), nil
@@ -241,22 +244,35 @@ func (p *JavaProvider) detectJavaVersion(projectPath string, gitHandler interfac
 
 // detectFramework detects framework
 func (p *JavaProvider) detectFramework(projectPath string, gitHandler interface{}) (string, error) {
+	// Priority-based framework detection - Spring Boot has highest priority
 	frameworkMap := map[string]string{
-		"spring-boot-starter": "Spring Boot",
-		"spring-webmvc":       "Spring MVC",
-		"spring-core":         "Spring Framework",
-		"quarkus":             "Quarkus",
-		"micronaut":           "Micronaut",
-		"vertx":               "Vert.x",
-		"dropwizard":          "Dropwizard",
-		"spark-core":          "Spark Java",
-		"jersey":              "Jersey",
-		"struts":              "Struts",
-		"wicket":              "Apache Wicket",
-		"vaadin":              "Vaadin",
+		"spring-boot-starter":           "Spring Boot",
+		"spring-boot-starter-web":       "Spring Boot Web",
+		"spring-boot-starter-data-jpa":  "Spring Boot Data JPA",
+		"spring-boot-starter-security":  "Spring Boot Security",
+		"spring-boot":                   "Spring Boot",
+		"spring-webmvc":                 "Spring MVC",
+		"spring-web":                    "Spring Web",
+		"spring-core":                   "Spring Framework",
+		"quarkus":                       "Quarkus",
+		"quarkus-resteasy":              "Quarkus RESTEasy",
+		"micronaut":                     "Micronaut",
+		"micronaut-http-server":         "Micronaut HTTP",
+		"vertx":                         "Vert.x",
+		"vertx-web":                     "Vert.x Web",
+		"dropwizard":                    "Dropwizard",
+		"dropwizard-core":               "Dropwizard Core",
+		"spark-core":                    "Spark Java",
+		"jersey":                        "Jersey",
+		"struts":                        "Struts",
+		"wicket":                        "Apache Wicket",
+		"vaadin":                        "Vaadin",
+		"jakarta.servlet":               "Jakarta Servlet",
+		"jakarta.ws.rs":                 "Jakarta JAX-RS",
+		"jakarta.persistence":           "Jakarta Persistence",
 	}
 
-	// Check dependencies in pom.xml
+	// Check dependencies in pom.xml with priority ordering
 	pomContent, err := p.SafeReadText(projectPath, "pom.xml", gitHandler)
 	if err != nil {
 		// If file doesn't exist, continue trying other methods
@@ -267,6 +283,12 @@ func (p *JavaProvider) detectFramework(projectPath string, gitHandler interface{
 		}
 	}
 	if pomContent != "" {
+		// Check for Spring Boot parent first (highest priority)
+		if strings.Contains(pomContent, "<parent>") && strings.Contains(pomContent, "spring-boot-starter-parent") {
+			return "Spring Boot", nil
+		}
+
+		// Check dependencies in priority order
 		for dependency, framework := range frameworkMap {
 			if strings.Contains(pomContent, dependency) {
 				return framework, nil
@@ -274,8 +296,32 @@ func (p *JavaProvider) detectFramework(projectPath string, gitHandler interface{
 		}
 	}
 
-	// Check dependencies in build.gradle
+	// Check dependencies in build.gradle with priority ordering
 	gradleContent, err := p.SafeReadText(projectPath, "build.gradle", gitHandler)
+	if err != nil {
+		// If file doesn't exist, continue trying build.gradle.kts
+		if strings.Contains(err.Error(), "FILE_READ_ERROR") {
+			// Continue trying build.gradle.kts
+		} else {
+			return "", err
+		}
+	}
+	if gradleContent != "" {
+		// Check for Spring Boot plugin first (highest priority)
+		if strings.Contains(gradleContent, "org.springframework.boot") {
+			return "Spring Boot", nil
+		}
+
+		// Check dependencies in priority order
+		for dependency, framework := range frameworkMap {
+			if strings.Contains(gradleContent, dependency) {
+				return framework, nil
+			}
+		}
+	}
+
+	// Check dependencies in build.gradle.kts
+	gradleKtsContent, err := p.SafeReadText(projectPath, "build.gradle.kts", gitHandler)
 	if err != nil {
 		// If file doesn't exist, return empty string instead of error
 		if strings.Contains(err.Error(), "FILE_READ_ERROR") {
@@ -283,9 +329,15 @@ func (p *JavaProvider) detectFramework(projectPath string, gitHandler interface{
 		}
 		return "", err
 	}
-	if gradleContent != "" {
+	if gradleKtsContent != "" {
+		// Check for Spring Boot plugin first (highest priority)
+		if strings.Contains(gradleKtsContent, "org.springframework.boot") {
+			return "Spring Boot", nil
+		}
+
+		// Check dependencies in priority order
 		for dependency, framework := range frameworkMap {
-			if strings.Contains(gradleContent, dependency) {
+			if strings.Contains(gradleKtsContent, dependency) {
 				return framework, nil
 			}
 		}
@@ -301,51 +353,126 @@ func (p *JavaProvider) GenerateCommands(result *types.DetectResult, options type
 	// Check if pom.xml exists
 	hasPom := p.HasFileInEvidence(result.Evidence.Files, "pom.xml")
 
-	if hasPom {
-		// Maven project
-		commands.Dev = []string{
-			"mvn clean compile",
-			"mvn spring-boot:run",
-		}
-		commands.Build = []string{
-			"mvn clean package",
-		}
-		commands.Start = []string{
-			"java -jar target/*.jar",
-		}
-	} else {
-		// Check if Gradle files exist
-		hasGradle := p.HasFileInEvidence(result.Evidence.Files, "build.gradle") || p.HasFileInEvidence(result.Evidence.Files, "build.gradle.kts")
+	// Check if Gradle files exist
+	hasGradle := p.HasFileInEvidence(result.Evidence.Files, "build.gradle") || p.HasFileInEvidence(result.Evidence.Files, "build.gradle.kts")
 
-		if hasGradle {
-			// Gradle project
-			commands.Dev = []string{
-				"./gradlew build",
-				"./gradlew bootRun",
-			}
-			commands.Build = []string{
-				"./gradlew build",
-			}
-			commands.Start = []string{
-				"java -jar build/libs/*.jar",
-			}
+	// Check for Spring Boot specifically
+	isSpringBoot := strings.Contains(result.Framework, "Spring Boot")
+
+	if hasPom {
+		// Maven project with framework-specific commands
+		if isSpringBoot {
+			commands.Setup = []string{"mvn clean compile"}
+			commands.Dev = []string{"mvn spring-boot:run"}
+			commands.Build = []string{"mvn clean package -DskipTests"}
+			commands.Run = []string{"java -jar target/*.jar"}
+		} else if result.Framework == "Quarkus" {
+			commands.Setup = []string{"mvn clean compile"}
+			commands.Dev = []string{"mvn quarkus:dev"}
+			commands.Build = []string{"mvn clean package -DskipTests"}
+			commands.Run = []string{"java -jar target/quarkus-app/quarkus-app.jar"}
+		} else if result.Framework == "Micronaut" {
+			commands.Setup = []string{"mvn clean compile"}
+			commands.Dev = []string{"mvn mn:run"}
+			commands.Build = []string{"mvn clean package -DskipTests"}
+			commands.Run = []string{"java -jar target/*.jar"}
+		} else {
+			// Generic Maven project
+			commands.Setup = []string{"mvn clean compile"}
+			commands.Dev = []string{"mvn exec:java"}
+			commands.Build = []string{"mvn clean package -DskipTests"}
+			commands.Run = []string{"java -jar target/*.jar"}
+		}
+	} else if hasGradle {
+		// Gradle project with framework-specific commands
+		if isSpringBoot {
+			commands.Setup = []string{"./gradlew compileJava"}
+			commands.Dev = []string{"./gradlew bootRun"}
+			commands.Build = []string{"./gradlew build -x test"}
+			commands.Run = []string{"java -jar build/libs/*.jar"}
+		} else if result.Framework == "Quarkus" {
+			commands.Setup = []string{"./gradlew compileJava"}
+			commands.Dev = []string{"./gradlew quarkusDev"}
+			commands.Build = []string{"./gradlew build -x test"}
+			commands.Run = []string{"java -jar build/quarkus-app/quarkus-app.jar"}
+		} else if result.Framework == "Micronaut" {
+			commands.Setup = []string{"./gradlew compileJava"}
+			commands.Dev = []string{"./gradlew run"}
+			commands.Build = []string{"./gradlew build -x test"}
+			commands.Run = []string{"java -jar build/libs/*.jar"}
+		} else {
+			// Generic Gradle project
+			commands.Setup = []string{"./gradlew compileJava"}
+			commands.Dev = []string{"./gradlew run"}
+			commands.Build = []string{"./gradlew build -x test"}
+			commands.Run = []string{"java -jar build/libs/*.jar"}
 		}
 	}
 
 	return commands
 }
 
+// GenerateEnvironment generates environment variables for Java project
+func (p *JavaProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Java specific environment variables
+	env["JAVA_OPTS"] = "-Xmx512m"
+
+	// Set port for web applications
+	env["PORT"] = "8080"
+	env["SERVER_PORT"] = "8080"
+
+	// Add Java version if available
+	if result.Version != "" {
+		env["JAVA_VERSION"] = result.Version
+	}
+
+	// Add framework-specific environment variables
+	if strings.Contains(result.Framework, "Spring Boot") {
+		env["SPRING_PROFILES_ACTIVE"] = "production"
+		env["SPRING_JPA_HIBERNATE_DDL_AUTO"] = "update"
+		env["SPRING_DATASOURCE_URL"] = "jdbc:h2:mem:testdb"
+		env["SPRING_H2_CONSOLE_ENABLED"] = "false"
+		env["SPRING_OUTPUT_ANSI_ENABLED"] = "always"
+	} else if result.Framework == "Quarkus" {
+		env["QUARKUS_PROFILE"] = "prod"
+		env["QUARKUS_DATASOURCE_URL"] = "jdbc:h2:mem:testdb"
+		env["QUARKUS_HTTP_PORT"] = "8080"
+	} else if result.Framework == "Micronaut" {
+		env["MICRONAUT_ENVIRONMENTS"] = "prod"
+		env["MICRONAUT_SERVER_PORT"] = "8080"
+	} else if result.Framework == "Vert.x" {
+		env["VERTX_OPTIONS"] = "{}"
+	}
+
+	// Add build tool specific environment variables
+	if result.Metadata != nil {
+		if buildTool, ok := result.Metadata["packageManager"].(string); ok {
+			if buildTool == "maven" {
+				env["MAVEN_OPTS"] = "-DskipTests"
+			} else if buildTool == "gradle" {
+				env["GRADLE_OPTS"] = "-DskipTests=true"
+			}
+		}
+	}
+
+	return env
+}
+
 // NeedsNativeCompilation checks if Java project needs native compilation
 func (p *JavaProvider) NeedsNativeCompilation(result *types.DetectResult) bool {
 	// Java projects usually don't need native compilation, unless using GraalVM Native Image
-	// Check if there are GraalVM Native Image related configurations
+	// Check for frameworks that typically use native compilation
+	if result.Framework == "GraalVM" || result.Framework == "Quarkus" {
+		return true
+	}
 
-	// Check if files exist
-	if p.HasFileInEvidence(result.Evidence.Files, "pom.xml") ||
-		p.HasFileInEvidence(result.Evidence.Files, "build.gradle") ||
-		p.HasFileInEvidence(result.Evidence.Files, "build.gradle.kts") {
-		// Here we can further check file content, but for simplicity, we assume most Java projects don't need native compilation
-		return false
+	// Check metadata for native compilation flags
+	if result.Metadata != nil {
+		if needsNative, ok := result.Metadata["needsNativeCompilation"].(bool); ok {
+			return needsNative
+		}
 	}
 
 	return false

@@ -123,8 +123,19 @@ func (g *GitHandler) cloneRepository(repo *types.GitRepository) (string, error) 
 	repoName := g.extractRepoName(repo.URL)
 	clonePath := filepath.Join(tempDir, repoName)
 
-	// Build clone command arguments
-	cloneArgs := []string{"clone", "--depth", "1", repo.URL, clonePath}
+	// Build clone command arguments with optimizations
+	var cloneArgs []string
+	if repo.Ref != nil {
+		// Clone only the specific branch/tag needed
+		cloneArgs = []string{"clone", "--depth", "1", "--single-branch", "--branch", *repo.Ref, repo.URL, clonePath}
+	} else {
+		// Clone only the default branch
+		cloneArgs = []string{"clone", "--depth", "1", "--single-branch", repo.URL, clonePath}
+	}
+
+	// Add partial clone filter by default to reduce data transfer (Git 2.19+)
+	// Use blob:none filter to exclude blob data initially, download on demand
+	cloneArgs = append(cloneArgs, "--filter=blob:none")
 
 	// Execute clone
 	_, err = g.execGit(cloneArgs, "")
@@ -137,27 +148,43 @@ func (g *GitHandler) cloneRepository(repo *types.GitRepository) (string, error) 
 		)
 	}
 
-	// If ref is specified, switch to corresponding branch/tag
+	// If ref is specified and wasn't cloned with --branch, switch to it
 	if repo.Ref != nil {
-		// First try to fetch all branches and tags
-		_, err = g.execGit([]string{"fetch", "--all", "--tags"}, clonePath)
-		if err != nil {
-			g.cleanupTempDir(tempDir)
-			return "", err
-		}
-
-		// Switch to specified ref
+		// Try direct checkout first (might already be available)
 		_, err = g.execGit([]string{"checkout", *repo.Ref}, clonePath)
 		if err != nil {
-			g.cleanupTempDir(tempDir)
-			return "", types.NewDevBoxPackError(
-				fmt.Sprintf("cannot switch to specified ref: %s", *repo.Ref),
-				types.ErrorCodeGitCheckoutError,
-				map[string]interface{}{
-					"ref":   *repo.Ref,
-					"error": err.Error(),
-				},
-			)
+			// If checkout fails, fetch only the specific ref needed
+			fetchArgs := []string{"fetch", "origin", *repo.Ref}
+			_, err = g.execGit(fetchArgs, clonePath)
+			if err != nil {
+				// If specific ref fetch fails, try fetching all as fallback
+				_, err = g.execGit([]string{"fetch", "--all", "--tags"}, clonePath)
+				if err != nil {
+					g.cleanupTempDir(tempDir)
+					return "", types.NewDevBoxPackError(
+						fmt.Sprintf("failed to fetch ref '%s': %s", *repo.Ref, err.Error()),
+						types.ErrorCodeGitCheckoutError,
+						map[string]interface{}{
+							"ref":   *repo.Ref,
+							"error": err.Error(),
+						},
+					)
+				}
+			}
+
+			// Try checkout again
+			_, err = g.execGit([]string{"checkout", *repo.Ref}, clonePath)
+			if err != nil {
+				g.cleanupTempDir(tempDir)
+				return "", types.NewDevBoxPackError(
+					fmt.Sprintf("cannot switch to specified ref: %s", *repo.Ref),
+					types.ErrorCodeGitCheckoutError,
+					map[string]interface{}{
+						"ref":   *repo.Ref,
+						"error": err.Error(),
+					},
+				)
+			}
 		}
 	}
 
@@ -315,14 +342,20 @@ func (g *GitHandler) scanDirectory(basePath, currentPath string, files *[]*types
 func (g *GitHandler) getFileExtension(filename string) string {
 	ext := filepath.Ext(filename)
 	if ext != "" {
-		return strings.ToLower(ext[1:]) // Remove dot and convert to lowercase
+		return strings.ToLower(ext) // Keep dot and convert to lowercase
 	}
 	return ""
 }
 
 // isImportantDotFile checks if it's an important dot file
 func (g *GitHandler) isImportantDotFile(name string) bool {
-	importantDotFiles := []string{".gitignore", ".dockerignore", ".env", ".env.example", ".nvmrc", ".python-version"}
+	importantDotFiles := []string{
+		".gitignore", ".dockerignore", ".env", ".env.example", ".nvmrc", ".python-version",
+		".node-version", ".ruby-version", ".go-version",
+		".eslintrc.js", ".eslintrc.json", ".eslintrc.yml", ".eslintrc.yaml",
+		".prettierrc", ".prettierrc.js", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
+		".babelrc", ".babelrc.js", ".babelrc.json",
+	}
 	for _, file := range importantDotFiles {
 		if name == file {
 			return true
@@ -333,7 +366,10 @@ func (g *GitHandler) isImportantDotFile(name string) bool {
 
 // shouldIgnoreDirectory checks if directory should be ignored
 func (g *GitHandler) shouldIgnoreDirectory(name string) bool {
-	ignoredDirs := []string{"node_modules", ".git", "dist", "build", "__pycache__", ".pytest_cache", "target", "vendor"}
+	ignoredDirs := []string{
+		"node_modules", ".git", ".svn", "dist", "build", "__pycache__",
+		".pytest_cache", "target", "vendor", ".next", ".nuxt",
+	}
 	for _, dir := range ignoredDirs {
 		if name == dir {
 			return true
@@ -395,17 +431,45 @@ func (g *GitHandler) ReadJSONCFile(projectPath, filePath string, v interface{}) 
 		return err
 	}
 
-	// Simple JSONC processing: remove single-line comments
-	lines := strings.Split(content, "\n")
+	// JSONC processing: remove both single-line and multi-line comments
+	cleanedContent := content
+
+	// Remove block comments /* ... */
+	inBlockComment := false
+	var result strings.Builder
+	i := 0
+	for i < len(cleanedContent) {
+		if !inBlockComment && i+1 < len(cleanedContent) && cleanedContent[i:i+2] == "/*" {
+			inBlockComment = true
+			i += 2
+			continue
+		}
+		if inBlockComment && i+1 < len(cleanedContent) && cleanedContent[i:i+2] == "*/" {
+			inBlockComment = false
+			i += 2
+			continue
+		}
+		if !inBlockComment {
+			result.WriteByte(cleanedContent[i])
+		}
+		i++
+	}
+	cleanedContent = result.String()
+
+	// Remove single-line comments // and clean up whitespace
+	lines := strings.Split(cleanedContent, "\n")
 	var cleanedLines []string
 	for _, line := range lines {
-		// Remove // comments
-		if idx := strings.Index(line, "//"); idx != -1 {
-			line = line[:idx]
+		// Remove // comments (but not inside strings)
+		line = g.removeSingleLineComments(line)
+		// Trim whitespace
+		line = strings.TrimSpace(line)
+		// Skip empty lines
+		if line != "" {
+			cleanedLines = append(cleanedLines, line)
 		}
-		cleanedLines = append(cleanedLines, line)
 	}
-	cleanedContent := strings.Join(cleanedLines, "\n")
+	cleanedContent = strings.Join(cleanedLines, "\n")
 
 	err = json.Unmarshal([]byte(cleanedContent), v)
 	if err != nil {
@@ -420,6 +484,31 @@ func (g *GitHandler) ReadJSONCFile(projectPath, filePath string, v interface{}) 
 	}
 
 	return nil
+}
+
+// removeSingleLineComments removes // comments from a line, respecting strings
+func (g *GitHandler) removeSingleLineComments(line string) string {
+	inString := false
+	escaped := false
+	var result strings.Builder
+
+	for i, char := range line {
+		switch {
+		case char == '\\' && inString:
+			// Escape character inside string
+			escaped = true
+		case char == '"' && !escaped:
+			// Start/end of string
+			inString = !inString
+		case char == '/' && !inString && i+1 < len(line) && line[i+1] == '/' && !escaped:
+			// Start of comment outside string
+			return line[:i]
+		default:
+			escaped = false
+		}
+		result.WriteRune(char)
+	}
+	return line
 }
 
 // Cleanup cleans up temporary directories

@@ -91,8 +91,8 @@ func TestGeneratePlan_ValidPath(t *testing.T) {
 	}
 
 	// Basic validation of the plan
-	if plan.Runtime.Language == "" {
-		t.Error("Plan language is empty")
+	if plan.Runtime.Image == "" {
+		t.Error("Plan runtime image is empty")
 	}
 
 	if plan.Provider == "" {

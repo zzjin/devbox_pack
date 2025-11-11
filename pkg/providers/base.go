@@ -62,7 +62,7 @@ func (bp *BaseProvider) HasFile(files []types.FileInfo, fileName string) bool {
 	}
 
 	for _, file := range files {
-		if !file.IsDirectory && file.Path == fileName {
+		if file.Path == fileName {
 			return true
 		}
 	}
@@ -94,7 +94,16 @@ func (bp *BaseProvider) GetMatchingFiles(files []types.FileInfo, pattern string)
 	var matchingFiles []types.FileInfo
 
 	if strings.Contains(pattern, "*") {
-		regexPattern := strings.ReplaceAll(pattern, "*", ".*")
+		// Improve wildcard matching logic to ensure only file extensions are matched
+		regexPattern := pattern
+		if strings.HasPrefix(pattern, "*.") {
+			// For *.ext format, ensure matching the entire filename
+			ext := pattern[2:] // Remove "*."
+			regexPattern = `.*\.` + regexp.QuoteMeta(ext) + `$`
+		} else {
+			// For other wildcards, use original logic
+			regexPattern = strings.ReplaceAll(pattern, "*", ".*")
+		}
 		regex, err := regexp.Compile(regexPattern)
 		if err != nil {
 			return matchingFiles
@@ -133,8 +142,24 @@ func (bp *BaseProvider) ParseVersionFromJSON(
 		return "", err
 	}
 
-	if version, ok := content[versionField].(string); ok {
-		return version, nil
+	// Handle nested field access (e.g., "engines.node")
+	fieldParts := strings.Split(versionField, ".")
+	current := content
+
+	for i, part := range fieldParts {
+		if i == len(fieldParts)-1 {
+			// Last part should be a string
+			if version, ok := current[part].(string); ok {
+				return version, nil
+			}
+		} else {
+			// Intermediate parts should be maps
+			if next, ok := current[part].(map[string]interface{}); ok {
+				current = next
+			} else {
+				return "", fmt.Errorf("version field '%s' not found or not a string", versionField)
+			}
+		}
 	}
 
 	return "", fmt.Errorf("version field '%s' not found or not a string", versionField)
@@ -152,6 +177,9 @@ func (bp *BaseProvider) ParseVersionFromText(
 	if err != nil {
 		return "", err
 	}
+
+	// Trim whitespace from content for better matching
+	content = strings.TrimSpace(content)
 
 	matches := pattern.FindStringSubmatch(content)
 	if len(matches) > 1 {
@@ -345,21 +373,6 @@ func (bp *BaseProvider) SafeReadJSON(
 	gh := gitHandler.(*git.GitHandler)
 	var content map[string]interface{}
 	err := gh.ReadJSONFile(projectPath, fileName, &content)
-	if err != nil {
-		return nil, err
-	}
-	return content, nil
-}
-
-// SafeReadJSONC safely reads JSONC file (JSON with comments support)
-func (bp *BaseProvider) SafeReadJSONC(
-	projectPath string,
-	fileName string,
-	gitHandler interface{},
-) (map[string]interface{}, error) {
-	gh := gitHandler.(*git.GitHandler)
-	var content map[string]interface{}
-	err := gh.ReadJSONCFile(projectPath, fileName, &content)
 	if err != nil {
 		return nil, err
 	}

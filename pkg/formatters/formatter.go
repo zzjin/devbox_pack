@@ -27,6 +27,10 @@ func NewJSONFormatter() *JSONFormatter {
 
 // Format formats execution plan as JSON
 func (f *JSONFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOptions) (string, error) {
+	if plan == nil {
+		return "", fmt.Errorf("execution plan cannot be nil")
+	}
+
 	var data []byte
 	var err error
 
@@ -53,6 +57,10 @@ func NewPrettyFormatter() *PrettyFormatter {
 
 // Format formats execution plan as human-readable format
 func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOptions) (string, error) {
+	if plan == nil {
+		return "", fmt.Errorf("execution plan cannot be nil")
+	}
+
 	var lines []string
 
 	// Title
@@ -63,22 +71,17 @@ func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOp
 	// Runtime information
 	lines = append(lines, "📋 Runtime Configuration")
 	lines = append(lines, strings.Repeat("─", 20))
-	lines = append(lines, fmt.Sprintf("Language: %s", plan.Runtime.Language))
+	lines = append(lines, fmt.Sprintf("Provider: %s", plan.Provider))
 
-	// Handle version display, avoid pointer address display
-	version := "unknown"
-	if plan.Runtime.Version != nil {
-		version = *plan.Runtime.Version
-	}
-	lines = append(lines, fmt.Sprintf("Version: %s", version))
-
-	if len(plan.Runtime.Tools) > 0 {
-		lines = append(lines, fmt.Sprintf("Tools: %s", strings.Join(plan.Runtime.Tools, ", ")))
+	// Framework information if available
+	if plan.Runtime.Framework != nil {
+		lines = append(lines, fmt.Sprintf("Framework: %s", *plan.Runtime.Framework))
 	}
 
-	if len(plan.Runtime.Environment) > 0 {
+	// Environment variables are now at the top level
+	if len(plan.Environment) > 0 {
 		lines = append(lines, "Environment Variables:")
-		for key, value := range plan.Runtime.Environment {
+		for key, value := range plan.Environment {
 			lines = append(lines, fmt.Sprintf("  %s=%s", key, value))
 		}
 	}
@@ -87,7 +90,7 @@ func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOp
 	// Base image
 	lines = append(lines, "🐳 Base Image")
 	lines = append(lines, strings.Repeat("─", 20))
-	lines = append(lines, fmt.Sprintf("Image: %s", plan.Base))
+	lines = append(lines, fmt.Sprintf("Image: %s", plan.Runtime.Image))
 	lines = append(lines, "")
 
 	// APT dependencies
@@ -103,8 +106,9 @@ func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOp
 	// Commands
 	commandLabels := map[string]string{
 		"dev":   "🔧 Development Commands",
-		"build": "🏗️  Build Commands",
-		"start": "▶️  Start Commands",
+		"setup": "🏗️  Setup Commands",
+		"build": "Build Commands",
+		"run":   "Production Commands",
 	}
 
 	commands := []struct {
@@ -112,8 +116,9 @@ func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOp
 		commands []string
 	}{
 		{"dev", plan.Commands.Dev},
+		{"setup", plan.Commands.Setup},
 		{"build", plan.Commands.Build},
-		{"start", plan.Commands.Start},
+		{"run", plan.Commands.Run},
 	}
 
 	for _, cmd := range commands {
@@ -123,6 +128,33 @@ func (f *PrettyFormatter) Format(plan *types.ExecutionPlan, options *types.CLIOp
 			lines = append(lines, cmd.commands...)
 			lines = append(lines, "")
 		}
+	}
+
+	// Port information
+	if plan.Port > 0 {
+		lines = append(lines, fmt.Sprintf("Port: %d", plan.Port))
+		lines = append(lines, "")
+	}
+
+	// Detection evidence
+	if len(plan.Evidence.Files) > 0 || plan.Evidence.Reason != "" {
+		lines = append(lines, "🔍 Detection Evidence")
+		lines = append(lines, strings.Repeat("─", 20))
+
+		if len(plan.Evidence.Files) > 0 {
+			lines = append(lines, "Files:")
+			for _, file := range plan.Evidence.Files {
+				lines = append(lines, fmt.Sprintf("  • %s", file))
+			}
+		}
+
+		if plan.Evidence.Reason != "" {
+			if len(plan.Evidence.Files) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, fmt.Sprintf("Reason: %s", plan.Evidence.Reason))
+		}
+		lines = append(lines, "")
 	}
 
 	return strings.Join(lines, "\n"), nil
@@ -236,39 +268,4 @@ func (u *OutputUtils) OutputWarning(message string, options *types.CLIOptions) {
 	if options == nil || !options.Quiet {
 		fmt.Printf("⚠️  %s\n", message)
 	}
-}
-
-// Global instances
-var (
-	DefaultFormatterFactory = NewFormatterFactory()
-	DefaultOutputUtils      = NewOutputUtils()
-)
-
-// Convenience functions
-func FormatPlan(plan *types.ExecutionPlan, format string, options *types.CLIOptions) (string, error) {
-	return DefaultFormatterFactory.Format(plan, format)
-}
-
-func OutputPlan(plan *types.ExecutionPlan, options *types.CLIOptions) error {
-	return DefaultOutputUtils.OutputPlan(plan, options)
-}
-
-func OutputError(err error, options *types.CLIOptions) {
-	DefaultOutputUtils.OutputError(err, options)
-}
-
-func OutputDebug(message string, options *types.CLIOptions) {
-	DefaultOutputUtils.OutputDebug(message, options)
-}
-
-func OutputInfo(message string, options *types.CLIOptions) {
-	DefaultOutputUtils.OutputInfo(message, options)
-}
-
-func OutputSuccess(message string, options *types.CLIOptions) {
-	DefaultOutputUtils.OutputSuccess(message, options)
-}
-
-func OutputWarning(message string, options *types.CLIOptions) {
-	DefaultOutputUtils.OutputWarning(message, options)
 }

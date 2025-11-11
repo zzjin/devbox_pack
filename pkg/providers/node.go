@@ -158,6 +158,25 @@ func (np *NodeProvider) Detect(
 	if np.HasFile(files, ".node-version") {
 		evidenceFiles = append(evidenceFiles, ".node-version")
 	}
+	// Add framework-specific configuration files
+	if np.HasFile(files, "svelte.config.js") {
+		evidenceFiles = append(evidenceFiles, "svelte.config.js")
+	}
+	if np.HasFile(files, "svelte.config.ts") {
+		evidenceFiles = append(evidenceFiles, "svelte.config.ts")
+	}
+	if np.HasFile(files, "svelte.config.mjs") {
+		evidenceFiles = append(evidenceFiles, "svelte.config.mjs")
+	}
+	if np.HasFile(files, "astro.config.js") {
+		evidenceFiles = append(evidenceFiles, "astro.config.js")
+	}
+	if np.HasFile(files, "astro.config.ts") {
+		evidenceFiles = append(evidenceFiles, "astro.config.ts")
+	}
+	if np.HasFile(files, "astro.config.mjs") {
+		evidenceFiles = append(evidenceFiles, "astro.config.mjs")
+	}
 
 	evidence.Files = evidenceFiles
 
@@ -208,50 +227,118 @@ func (np *NodeProvider) GenerateCommands(result *types.DetectResult, options typ
 		packageManager = "bun"
 	}
 
-	// Development commands
-	commands.Dev = []string{
+	// Setup commands - install dependencies
+	commands.Setup = []string{
 		fmt.Sprintf("%s install", packageManager),
 	}
 
-	// Add development start command
+	// Development commands
 	if np.hasScript(result, "dev") {
-		commands.Dev = append(commands.Dev, fmt.Sprintf("%s run dev", packageManager))
+		commands.Dev = []string{fmt.Sprintf("%s run dev", packageManager)}
 	} else if np.hasScript(result, "start") {
-		commands.Dev = append(commands.Dev, fmt.Sprintf("%s run start", packageManager))
+		commands.Dev = []string{fmt.Sprintf("%s run start", packageManager)}
 	} else {
-		commands.Dev = append(commands.Dev, "node index.js")
+		commands.Dev = []string{"node index.js"}
 	}
 
 	// Build commands
 	if np.hasScript(result, "build") {
-		commands.Build = []string{
-			fmt.Sprintf("%s install", packageManager),
-			fmt.Sprintf("%s run build", packageManager),
+		buildCommands := []string{fmt.Sprintf("%s run build", packageManager)}
+
+		// Add TypeScript-specific build steps for SvelteKit
+		if np.isSvelteKitProject(result) && result.Metadata != nil {
+			if hasTypeScript, ok := result.Metadata["hasTypeScript"].(bool); ok && hasTypeScript {
+				// Prepend type checking before build
+				buildCommands = append([]string{
+					fmt.Sprintf("%s run check", packageManager), // Run SvelteKit type checking
+				}, buildCommands...)
+			}
 		}
+
+		commands.Build = buildCommands
 	}
 
-	// Start commands
-	commands.Start = []string{}
-	if np.hasScript(result, "start") {
-		commands.Start = append(commands.Start, fmt.Sprintf("%s run start", packageManager))
+	// Run commands - prioritize framework-specific logic
+	if np.isSvelteKitProject(result) {
+		// SvelteKit projects use "preview" script for production
+		commands.Run = []string{fmt.Sprintf("%s run preview", packageManager)}
+	} else if np.isAstroProject(result) {
+		// Astro projects use "preview" script for production
+		commands.Run = []string{fmt.Sprintf("%s run preview", packageManager)}
+	} else if np.hasScript(result, "start") {
+		commands.Run = []string{fmt.Sprintf("%s run start", packageManager)}
 	} else if len(commands.Build) > 0 {
 		// If there are build steps, assume it creates dist or build directory
 		if np.isNextJSProject(result) {
-			commands.Start = append(commands.Start, fmt.Sprintf("%s run start", packageManager))
+			commands.Run = []string{fmt.Sprintf("%s run start", packageManager)}
 		} else if np.isReactProject(result) {
-			commands.Start = append(commands.Start, "npx serve -s build")
+			commands.Run = []string{"npx serve -s build"}
 		} else {
-			commands.Start = append(commands.Start, "node index.js")
+			commands.Run = []string{"node index.js"}
 		}
 	} else {
-		commands.Start = append(commands.Start, "node index.js")
+		commands.Run = []string{"node index.js"}
 	}
 
 	return commands
 }
 
+// GenerateEnvironment generates environment variables for Node.js project
+func (np *NodeProvider) GenerateEnvironment(result *types.DetectResult) map[string]string {
+	env := make(map[string]string)
+
+	// Set Node.js specific environment variables
+	env["NODE_ENV"] = "development"
+	env["NPM_CONFIG_FUND"] = "false"
+	env["NPM_CONFIG_AUDIT"] = "false"
+
+	// Add framework-specific environment variables
+	if np.isSvelteKitProject(result) {
+		// SvelteKit-specific variables
+		env["SVELTEKIT_ADAPTER_NAME"] = "auto"
+		env["SVELTEKIT_PRERENDER"] = "auto"
+
+		// Set correct port for SvelteKit (default 5173)
+		env["PORT"] = "5173"
+	} else if np.isAstroProject(result) {
+		// Astro-specific variables
+		env["ASTRO_ADAPTER"] = "auto"
+
+		// Set correct port for Astro (default 4321)
+		env["PORT"] = "4321"
+	} else {
+		// Set port if not specified
+		env["PORT"] = "3000"
+	}
+
+	// Add TypeScript specific variables if TypeScript is detected
+	if result.Metadata != nil {
+		if hasTypeScript, ok := result.Metadata["hasTypeScript"].(bool); ok && hasTypeScript {
+			env["TS_NODE_PROJECT"] = "tsconfig.json"
+			// For SvelteKit with TypeScript
+			if np.isSvelteKitProject(result) {
+				env["SVELTEKIT TypeScript"] = "true"
+			}
+		}
+	}
+
+	// Add Node.js version if available
+	if result.Version != "" {
+		env["NODE_VERSION"] = result.Version
+	}
+
+	return env
+}
+
 // NeedsNativeCompilation checks if Node.js project needs native compilation
 func (np *NodeProvider) NeedsNativeCompilation(result *types.DetectResult) bool {
+	// Check metadata for native modules flag
+	if result.Metadata != nil {
+		if hasNativeModules, ok := result.Metadata["hasNativeModules"].(bool); ok {
+			return hasNativeModules
+		}
+	}
+
 	// Check native modules
 	nativeModules := []string{
 		"node-gyp", "node-sass", "sharp", "sqlite3",
@@ -279,12 +366,33 @@ func (np *NodeProvider) NeedsNativeCompilation(result *types.DetectResult) bool 
 
 // hasScript checks if package.json has specific script
 func (np *NodeProvider) hasScript(result *types.DetectResult, script string) bool {
-	// This is a simplified check - in real implementation, you need to parse package.json file
-	for _, file := range result.Evidence.Files {
-		if strings.Contains(file, "package.json") {
-			return true
+	// Check if we have package.json in evidence files
+	if !np.HasFileInEvidence(result.Evidence.Files, "package.json") {
+		return false
+	}
+
+	// For SvelteKit projects, we know they have specific scripts
+	if np.isSvelteKitProject(result) {
+		switch script {
+		case "dev", "build", "preview", "check":
+			return true // SvelteKit projects typically have these scripts
 		}
 	}
+
+	// For Astro projects, we know they have specific scripts
+	if np.isAstroProject(result) {
+		switch script {
+		case "dev", "build", "preview":
+			return true // Astro projects typically have these scripts
+		}
+	}
+
+	// For other projects, check common scripts
+	switch script {
+	case "dev", "build", "start":
+		return true // Most modern projects have these scripts
+	}
+
 	return false
 }
 
@@ -299,6 +407,20 @@ func (np *NodeProvider) isNextJSProject(result *types.DetectResult) bool {
 func (np *NodeProvider) isReactProject(result *types.DetectResult) bool {
 	// This needs to check React dependencies in package.json
 	return np.HasFileInEvidence(result.Evidence.Files, "package.json")
+}
+
+// isSvelteKitProject checks if it's a SvelteKit project
+func (np *NodeProvider) isSvelteKitProject(result *types.DetectResult) bool {
+	return np.HasFileInEvidence(result.Evidence.Files, "svelte.config.js") ||
+		np.HasFileInEvidence(result.Evidence.Files, "svelte.config.ts") ||
+		np.HasFileInEvidence(result.Evidence.Files, "svelte.config.mjs")
+}
+
+// isAstroProject checks if it's an Astro project
+func (np *NodeProvider) isAstroProject(result *types.DetectResult) bool {
+	return np.HasFileInEvidence(result.Evidence.Files, "astro.config.js") ||
+		np.HasFileInEvidence(result.Evidence.Files, "astro.config.ts") ||
+		np.HasFileInEvidence(result.Evidence.Files, "astro.config.mjs")
 }
 
 // detectNodeVersion detects Node.js version
@@ -327,35 +449,105 @@ func (np *NodeProvider) detectNodeVersion(projectPath string, gitHandler interfa
 	return np.CreateVersionInfo("20", "default"), nil
 }
 
-// detectFramework detects framework
+// detectFramework detects framework with SvelteKit priority
 func (np *NodeProvider) detectFramework(packageJSON map[string]interface{}) string {
 	if packageJSON == nil {
 		return ""
 	}
 
-	frameworkMap := map[string]string{
-		"next":          "Next.js",
-		"nuxt":          "Nuxt.js",
-		"react":         "React",
-		"vue":           "Vue.js",
-		"@angular/core": "Angular",
-		"svelte":        "Svelte",
-		"express":       "Express",
-		"koa":           "Koa",
-		"fastify":       "Fastify",
-		"nestjs":        "NestJS",
-		"@nestjs/core":  "NestJS",
-		"gatsby":        "Gatsby",
-		"vite":          "Vite",
-		"webpack":       "Webpack",
-		"parcel":        "Parcel",
-		"rollup":        "Rollup",
-		"electron":      "Electron",
-		"react-native":  "React Native",
-		"expo":          "Expo",
+	// Collect all dependencies
+	allDeps := make(map[string]interface{})
+	if deps, ok := packageJSON["dependencies"].(map[string]interface{}); ok {
+		for k, v := range deps {
+			allDeps[k] = v
+		}
+	}
+	if devDeps, ok := packageJSON["devDependencies"].(map[string]interface{}); ok {
+		for k, v := range devDeps {
+			allDeps[k] = v
+		}
+	}
+	if peerDeps, ok := packageJSON["peerDependencies"].(map[string]interface{}); ok {
+		for k, v := range peerDeps {
+			allDeps[k] = v
+		}
 	}
 
-	return np.DetectFrameworkFromDependencies(packageJSON, frameworkMap)
+	// Priority framework detection - check for specific frameworks first
+	if _, exists := allDeps["@sveltejs/kit"]; exists {
+		return "sveltekit"
+	}
+	if _, exists := allDeps["astro"]; exists {
+		return "astro"
+	}
+
+	// Then check other frameworks in order of specificity
+	frameworkPriority := []string{
+		"next",
+		"nuxt",
+		"@angular/core",
+		"gatsby",
+		"nestjs",
+		"@nestjs/core",
+		"express",
+		"koa",
+		"fastify",
+		"svelte",
+		"react",
+		"vue",
+		"vite",
+		"webpack",
+		"parcel",
+		"rollup",
+		"electron",
+		"react-native",
+		"expo",
+	}
+
+	for _, depName := range frameworkPriority {
+		if _, exists := allDeps[depName]; exists {
+			switch depName {
+			case "next":
+				return "next"
+			case "nuxt":
+				return "nuxt"
+			case "@angular/core":
+				return "angular"
+			case "gatsby":
+				return "gatsby"
+			case "nestjs", "@nestjs/core":
+				return "nestjs"
+			case "express":
+				return "express"
+			case "koa":
+				return "koa"
+			case "fastify":
+				return "fastify"
+			case "svelte":
+				return "svelte"
+			case "react":
+				return "react"
+			case "vue":
+				return "vue"
+			case "vite":
+				return "vite"
+			case "webpack":
+				return "webpack"
+			case "parcel":
+				return "parcel"
+			case "rollup":
+				return "rollup"
+			case "electron":
+				return "electron"
+			case "react-native":
+				return "react-native"
+			case "expo":
+				return "expo"
+			}
+		}
+	}
+
+	return ""
 }
 
 // detectBuildTool detects build tool
