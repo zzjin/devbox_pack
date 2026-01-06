@@ -5,158 +5,83 @@ description: Analyzes local or remote projects to generate deployment configurat
 
 # Project Packing and Analysis
 
-Analyzes a project (local directory or Git repository) and generates a standardized JSON configuration for deployment. Detects the programming language, dependencies, execution commands, and port configuration for both development and production environments.
+Analyzes a project (local directory or Git repository) and generates standardized JSON configuration for deployment. Detects programming language, dependencies, and runtime commands for dev/prod environments.
 
-> **📁 Documentation Structure**
-> - **SKILL.md** (this file) - Core workflow and detection rules
-> - **[examples.md](examples.md)** - Complete working examples with explanations
+> **📁 Progressive Documentation**
+> - **SKILL.md** (this file) - Core workflow and quick reference
+> - **[examples/](examples/)** - Language-specific examples:
+>   - [nodejs.md](examples/nodejs.md) - Node.js, Next.js, Vite, Express
+>   - [python.md](examples/python.md) - Django, FastAPI, Flask
+>   - [golang.md](examples/golang.md) - Go microservices, Gin
+>   - [ruby.md](examples/ruby.md) - Rails, Sinatra, Puma
+>   - [php.md](examples/php.md) - Laravel, Symfony
+>   - [java.md](examples/java.md) - Spring Boot, Maven, Gradle
+>   - [rust.md](examples/rust.md) - Actix-web, Axum, Rocket
+>   - [deno.md](examples/deno.md) - Fresh, Oak, Deno runtime
+>   - [static.md](examples/static.md) - HTML/CSS/JS, SPAs
 
-## When to Use This Skill
+## Core Workflow
 
-- User asks to "pack" a project
-- User mentions "analyze project" or "project analysis"
-- User needs to "generate deployment config" or "runtime configuration"
-- User wants to know how to run a project in dev/prod
-- User provides a Git repository URL for analysis
+### Step 1: Detect Language
 
-## Core Principles
-
-### 1. Runtime Environment: Debian Linux + Prebuilt Binaries
-
-**Target system**: Debian-based Linux (debian:bullseye, ubuntu:22.04) with glibc
-
-**Key implication**: Most native modules use prebuilt binaries. System dependencies are rarely needed.
-- Node.js base images include graphics libs (canvas), SSL, compression
-- Python base images include database client libs (psycopg2), image processing (Pillow)
-- Go/Rust binaries are typically static
-
-**Default to `"apt": []`** unless project documentation or Dockerfile explicitly requires system packages.
-
-### 2. Network Binding: Always 0.0.0.0
-
-**CRITICAL**: All dev and prod commands MUST bind to `0.0.0.0`, never `localhost` or `127.0.0.1`
-
-**Syntax by language**:
-- Node.js: `--host 0.0.0.0` or `HOST=0.0.0.0`
-- Python: `0.0.0.0:PORT` or `--bind 0.0.0.0:PORT`
-- Go: `:PORT` or `0.0.0.0:PORT`
-- Java: `--server.address=0.0.0.0`
-- Ruby: `-b 0.0.0.0`
-- PHP: `-S 0.0.0.0:PORT`
-
-### 3. Language Detection Priority
-
-**CRITICAL**: Always follow this exact order:
+Scan project directory (max 2 levels) for signature files in priority order:
 
 ```
-PHP > Golang > Java > Rust > Ruby > Python > Deno > Node > StaticFile > Shell
+PHP > Golang > Java > Rust > Ruby > Python > Deno > Node > Static > Shell
 ```
-
-Return up to 2 execution plans (one per detected language/subproject). Only traverse up to 2 levels of subdirectories.
-
-**CRITICAL**: You can ONLY access files within the given project directory. You are **PROHIBITED** from:
-  - Reading any files in parent directories (e.g., `../`, `../../`)
-  - Accessing files outside the project root path
-  - Using absolute paths that point outside the project directory
-  - Following symlinks that lead outside the project directory
-
-## Quick Detection Reference
 
 | Priority | Language | Signature Files | Default Port |
 |----------|----------|-----------------|--------------|
 | 1 | PHP | `composer.json`, `*.php` | 8080 |
-| 2 | Golang | `go.mod`, `*.go` | 8080 |
+| 2 | Golang | `go.mod` (required) | 8080 |
 | 3 | Java | `pom.xml`, `build.gradle` | 8080 |
-| 4 | Rust | `Cargo.toml`, `*.rs` | 8080 |
-| 5 | Ruby | `Gemfile`, `*.rb` | 3000 |
+| 4 | Rust | `Cargo.toml` (required) | 8080 |
+| 5 | Ruby | `Gemfile` | 3000 |
 | 6 | Python | `requirements.txt`, `*.py` | 8000 |
 | 7 | Deno | `deno.json` + `.ts/.js` | 8000 |
 | 8 | Node | `package.json` (no deno.json) | 3000 |
 | 9 | Static | `index.html` (no backend) | 8080 |
 | 10 | Shell | `*.sh`, `run.sh` | 8080 |
 
-**Version detection priority**:
-1. Version files (`.node-version`, `.python-version`, `.ruby-version`)
-2. Package manifests (`package.json` engines, `go.mod` go directive)
-3. Omit if uncertain
+Return up to 2 execution plans (one per detected language/subproject).
 
-**Port detection priority**:
-1. Explicitly configured in code
-2. Environment variable in scripts
-3. Framework default
-
-## Analysis Workflow
-
-### Step 1: Identify Source
-
-```bash
-# If URL contains .git or starts with http/https/git@
-if [[ "$input" =~ \.git|^https?://|^git@ ]]; then
-  temp_dir=$(mktemp -d)
-  git clone --depth 1 --filter=tree:0 "$input" "$temp_dir"
-  project_dir="$temp_dir"
-else
-  project_dir="$input"
-fi
-```
-
-### Step 2: Detect Languages
-
-Scan project directory (max 2 levels) for signature files in priority order. Stop after finding 2 languages.
-
-**PHP**: `composer.json`, `index.php`, `*.php`
-**Golang**: `go.mod` (required), `go.sum`, `main.go`
-**Java**: `pom.xml` or `build.gradle`, `*.java`
-**Rust**: `Cargo.toml` (required), `Cargo.lock`, `*.rs`
-**Ruby**: `Gemfile`, `config.ru`, `*.rb`
-**Python**: `requirements.txt`, `setup.py`, `pyproject.toml`, `*.py`
-**Deno**: `deno.json` or `deno.jsonc` + `.ts/.js`
-**Node.js**: `package.json` (and no deno.json)
-**Static**: `index.html` + assets (no backend framework)
-**Shell**: `*.sh`, `run.sh`, `start.sh`
-
-### Step 3: Analyze Each Language
+### Step 2: Analyze Project
 
 For each detected language:
 
-1. **Extract version**: From version files or package manifests
-2. **Determine dependencies**:
-   - **APT packages**: Default to `[]` (empty)
-   - Only include if project docs explicitly require system packages
+1. **Determine framework** - Check dependencies/config files
+2. **Extract version** - From version files (`.node-version`, `.python-version`) or manifests
 3. **Generate commands**:
-   - **Setup**: Install dependencies, build (if needed)
-   - **Dev**: Development server with hot reload, bound to 0.0.0.0
-   - **Prod**: Optimized production server, bound to 0.0.0.0
-4. **Detect port**: From code/config or use framework default
-5. **Collect evidence**: List detected files and reasoning
+   - Setup: Install dependencies, build if needed
+   - Dev: Development server with hot reload, **bound to 0.0.0.0**
+   - Prod: Optimized production server, **bound to 0.0.0.0**
+4. **Detect port** - From code/config or use framework default
+5. **Build evidence** - List detected files and reasoning
 
-### Step 4: Generate JSON Output
+**For language-specific patterns, see → [examples/](examples/)**
 
-Output a JSON array with 1-2 execution plans.
+### Step 3: Generate JSON Output
 
-## Output Format
+Output JSON array with 1-2 execution plans matching this structure:
 
 ```json
 [
   {
     "language": "string",
     "version": "string (optional)",
-    "apt": ["string (optional)"],
+    "apt": [],
     "dev": {
-      "environment": {
-        "KEY": "value"
-      },
+      "environment": {"KEY": "value"},
       "setup": ["command"],
       "commands": ["command with --host 0.0.0.0"]
     },
     "prod": {
-      "environment": {
-        "KEY": "value"
-      },
+      "environment": {"KEY": "value"},
       "setup": ["command"],
       "commands": ["command with --host 0.0.0.0"]
     },
     "port": 3000,
+    "entrypoint": "#!/bin/bash\n\napp_env=${1:-development}\n\nif [ \"$app_env\" = \"production\" ] || [ \"$app_env\" = \"prod\" ] ; then\n    # prod setup and commands\nelse\n    # dev setup and commands\nfi",
     "evidence": {
       "files": ["detected files"],
       "reason": "explanation of detection"
@@ -165,190 +90,148 @@ Output a JSON array with 1-2 execution plans.
 ]
 ```
 
-## Language-Specific Patterns
+## Critical Rules
 
-### Node.js
+### 1. Network Binding: Always 0.0.0.0
 
-**Package manager detection**:
-- `package-lock.json` → npm
-- `yarn.lock` → yarn
-- `pnpm-lock.yaml` → pnpm
+**All dev and prod commands MUST bind to `0.0.0.0`**, never `localhost` or `127.0.0.1`.
 
-**Common patterns**:
-```json
-{
-  "language": "node",
-  "version": "20.10.0",
-  "apt": [],
-  "dev": {
-    "setup": ["npm install"],
-    "commands": ["npm run dev -- --host 0.0.0.0 --port 3000"]
-  },
-  "prod": {
-    "environment": {"NODE_ENV": "production"},
-    "setup": ["npm install", "npm run build"],
-    "commands": ["npm start -- --host 0.0.0.0 --port 3000"]
-  },
-  "port": 3000
-}
+Syntax by language:
+- Node: `--host 0.0.0.0`
+- Python: `0.0.0.0:PORT` or `--bind 0.0.0.0:PORT`
+- Go: `:PORT` or `HOST=0.0.0.0`
+- Ruby: `-b 0.0.0.0`
+- PHP: `--host=0.0.0.0`
+- Java: `SERVER_ADDRESS=0.0.0.0`
+
+### 2. APT Dependencies: Default to Empty
+
+**Default: `"apt": []`** for all languages.
+
+Reasons:
+- Debian base images include common libraries
+- Prebuilt binaries handle native dependencies (canvas, sharp, psycopg2-binary, Pillow)
+- Go/Rust produce static binaries
+
+**Only include APT packages if**:
+- Project documentation explicitly requires them
+- Dockerfile shows system package installation
+- CLI tools needed: `postgresql-client`, `ffmpeg`
+
+### 3. Entrypoint Script
+
+**REQUIRED**: The `entrypoint` field must be a unified shell script:
+
+```bash
+#!/bin/bash
+app_env=${1:-development}
+if [ "$app_env" = "production" ] || [ "$app_env" = "prod" ] ; then
+    # Export prod environment vars
+    # Run prod setup commands
+    # Run prod commands
+else
+    # Export dev environment vars
+    # Run dev setup commands
+    # Run dev commands
+fi
 ```
 
-### Python
+**Rules**:
+- Accept optional first argument (defaults to `development`)
+- Check for `production` or `prod`
+- Export all environment variables using `export KEY=value`
+- Run setup before main commands
+- Preserve `cd` directory changes
+- For identical dev/prod (static), omit if/else
 
-**Framework detection**:
-- `manage.py` → Django
-- `flask` in requirements → Flask
-- `fastapi` + `uvicorn` → FastAPI
+### 4. Security Constraints
 
-**Common patterns**:
-```json
-{
-  "language": "python",
-  "version": "3.11",
-  "apt": [],
-  "dev": {
-    "setup": ["pip install -r requirements.txt"],
-    "commands": ["python manage.py runserver 0.0.0.0:8000"]
-  },
-  "prod": {
-    "environment": {"PYTHONENV": "production"},
-    "setup": ["pip install -r requirements.txt"],
-    "commands": ["gunicorn --bind 0.0.0.0:8000 app:app"]
-  },
-  "port": 8000
-}
-```
+**You can ONLY access files within the given project directory.**
 
-### Golang
+**PROHIBITED**:
+- Reading parent directories (`../`, `../../`)
+- Accessing files outside project root
+- Using absolute paths outside project
+- Following symlinks outside project
 
-**Common patterns**:
-```json
-{
-  "language": "go",
-  "version": "1.23",
-  "apt": [],
-  "dev": {
-    "environment": {
-      "CGO_ENABLED": "0",
-      "PORT": "8080",
-      "HOST": "0.0.0.0"
-    },
-    "commands": ["go run ."]
-  },
-  "prod": {
-    "environment": {
-      "CGO_ENABLED": "0",
-      "GO_ENV": "production",
-      "PORT": "8080",
-      "HOST": "0.0.0.0"
-    },
-    "setup": ["go build -o app ."],
-    "commands": ["./app"]
-  },
-  "port": 8080
-}
-```
+### 5. Environment Variables
 
-### Ruby
+**Remove localhost URLs from production environment**:
 
-**Common patterns**:
-```json
-{
-  "language": "ruby",
-  "version": "3.2",
-  "apt": [],
-  "dev": {
-    "setup": ["bundle install"],
-    "commands": ["bundle exec rails server -b 0.0.0.0 -p 3000"]
-  },
-  "prod": {
-    "environment": {"RAILS_ENV": "production"},
-    "setup": ["bundle install --without development test"],
-    "commands": ["bundle exec rails server -b 0.0.0.0 -p 3000"]
-  },
-  "port": 3000
-}
-```
+❌ Remove: `NEXT_PUBLIC_APP_URL=http://localhost:3000`, `VITE_API_URL=http://localhost:8080`
 
-## Special Cases
+✅ Keep internal services: `DATABASE_URL=postgresql://localhost:5432/db`
 
-### Multi-Language Projects
-
-**Example structure**:
-```
-project/
-├── package.json          # Node.js (primary)
-├── api/
-│   └── go.mod           # Golang (secondary)
-```
-
-Generate separate execution plans for each language (max 2), respecting priority order.
-
-### Static Files
-
-Only detect as static if NO backend framework is present:
-
-```json
-{
-  "language": "static",
-  "apt": [],
-  "dev": {
-    "commands": ["python3 -m http.server 8080 --bind 0.0.0.0"]
-  },
-  "prod": {
-    "commands": ["python3 -m http.server 8080 --bind 0.0.0.0"]
-  },
-  "port": 8080
-}
-```
+Common patterns to check:
+- `NEXT_PUBLIC_*`, `VITE_*`, `REACT_APP_*`
+- `API_BASE_URL`, `APP_URL`, `BACKEND_URL`, `PUBLIC_URL`
 
 ## Validation Checklist
 
 Before outputting JSON, verify:
 
 - [ ] All commands bind to `0.0.0.0` (not localhost)
-- [ ] Port number is included
-- [ ] Evidence includes detected files and clear reason
-- [ ] Language priority order is respected
-- [ ] Dev and prod environments are differentiated
-- [ ] Setup commands install necessary dependencies
-- [ ] Commands are executable (no placeholders)
+- [ ] Port number included
+- [ ] Evidence lists detected files and clear reasoning
+- [ ] Language priority order respected
+- [ ] Dev and prod environments differentiated
 - [ ] APT packages default to `[]`
-- [ ] JSON is valid and matches schema
+- [ ] JSON valid and matches schema
+- [ ] Entrypoint script generated and properly formatted
+- [ ] Entrypoint exports environment variables
+- [ ] Entrypoint runs setup before main commands
 
 ## Error Handling
 
-**No language detected**: Output empty array `[]`
+- **No language detected**: Output empty array `[]`
+- **Git clone fails**: Report error, do not proceed
+- **Multiple subprojects > 2**: Select top 2 by priority
 
-**Git clone fails**: Report error, do not proceed
+## Language-Specific Guides
 
-**Multiple subprojects > 2**: Select top 2 by priority
+**When you need detailed guidance for a specific language**:
 
-## Complete Examples
+- **Node.js projects** → See [examples/nodejs.md](examples/nodejs.md)
+  - Package manager detection (npm/yarn/pnpm)
+  - Framework patterns (Vite, Next.js, Express)
+  - Host binding syntax
 
-For detailed examples with full project analysis, see:
+- **Python projects** → See [examples/python.md](examples/python.md)
+  - Framework detection (Django, FastAPI, Flask)
+  - WSGI/ASGI server selection
+  - Django-specific commands
 
-**→ [examples.md](examples.md)**
+- **Go projects** → See [examples/golang.md](examples/golang.md)
+  - Static binary compilation
+  - Subdirectory handling
+  - Gin/Echo framework patterns
 
-Available examples:
-1. Simple Node.js Project (React + Vite)
-2. Multi-Language Monorepo (Go + Node.js)
-3. Python Django with PostgreSQL
-4. Static Website
-5. Go Microservice
-6. Ruby on Rails Application
+- **Ruby projects** → See [examples/ruby.md](examples/ruby.md)
+  - Rails vs Sinatra detection
+  - Bundle install strategies
+  - Puma server configuration
 
-## Common Patterns Summary
+- **PHP projects** → See [examples/php.md](examples/php.md)
+  - Laravel/Symfony detection
+  - Composer strategies
+  - Artisan commands
 
-| Package/Module | Language | APT Needed? | Why |
-|----------------|----------|-------------|-----|
-| `canvas` | Node.js | ❌ NO | Prebuilt binary + runtime libs in base image |
-| `sharp` | Node.js | ❌ NO | Bundled libvips |
-| `Pillow` | Python | ❌ NO | Binary wheels for glibc |
-| `psycopg2-binary` | Python | ❌ NO | Binary wheel includes libpq |
-| `lxml` | Python | ❌ NO | Binary wheels with libs |
-| Go/Rust binaries | All | ❌ NO | Static or self-contained |
+- **Java projects** → See [examples/java.md](examples/java.md)
+  - Spring Boot with Maven/Gradle
+  - JVM options and profiles
+  - Build tool detection
 
-**When APT IS needed** (rare):
-- CLI tools: `postgresql-client`, `redis-tools`
-- Explicit in docs: `ffmpeg`, specialized system libs
+- **Rust projects** → See [examples/rust.md](examples/rust.md)
+  - Actix-web, Axum, Rocket frameworks
+  - Release build optimization
+  - Cargo commands
+
+- **Deno projects** → See [examples/deno.md](examples/deno.md)
+  - Fresh, Oak frameworks
+  - Permission flags
+  - TypeScript runtime
+
+- **Static sites** → See [examples/static.md](examples/static.md)
+  - Pure HTML/CSS/JS
+  - Built SPAs
+  - Static file serving
